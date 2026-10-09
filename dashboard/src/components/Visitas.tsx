@@ -7,9 +7,9 @@ import type { ExportCol } from "../lib/export";
 import { fmt } from "../lib/format";
 import { L, locale } from "../lib/i18n";
 import { isDev } from "../lib/source";
-import { DONO_VISITAS, useDonoVisitas, useVisitas, visitas, type VisitaUsuario, type VisitasResumo } from "../lib/visitas";
+import { useDonoVisitas, useVisitas, visitas, type VisitaUsuario, type VisitasResumo } from "../lib/visitas";
 
-/** Seção "Visitas" da página Acessos, visível só para DONO_VISITAS (regra garantida no banco): quem entrou, quando, onde. */
+/** Seção "Visitas" da página Acessos, visível só para administradores (regra garantida no banco). */
 export function Visitas() {
   const dono = useDonoVisitas();
   const [dias, setDias] = useState(30);
@@ -68,8 +68,8 @@ export function Visitas() {
           options={[{ id: "7", label: L("7 dias", "7 days") }, { id: "30", label: L("30 dias", "30 days") }, { id: "90", label: L("90 dias", "90 days") }]} />
       </div>
       <p className="text-sm text-muted">
-        {L(`Cada página aberta por um e-mail autorizado gera um registro: e-mail, horário, página, estado, idioma e tipo de aparelho (celular ou desktop). Não guardamos IP nem o navegador completo. Só ${DONO_VISITAS} vê esta seção.`,
-          `Every page opened by an authorized email creates a record: email, time, page, state, language and device type (mobile or desktop). No IP address or full browser string is stored. Only ${DONO_VISITAS} sees this section.`)}
+        {L("Cada página aberta por um e-mail autorizado gera um registro: e-mail, horário, página, estado, idioma e tipo de aparelho (celular ou desktop). Não guardamos IP nem o navegador completo. Só administradores veem esta seção.",
+          "Every page opened by an authorized email creates a record: email, time, page, state, language and device type (mobile or desktop). No IP address or full browser string is stored. Only administrators can see this section.")}
         {isDev && <b> {L("Modo dev: dados de exemplo.", "Dev mode: sample data.")}</b>}
       </p>
       {q.error && <ErrorBox error={q.error} />}

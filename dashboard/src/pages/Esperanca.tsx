@@ -1,22 +1,26 @@
 import type { ColumnDef } from "@tanstack/react-table";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { DataTable } from "../components/DataTable";
 import { LazyMap } from "../components/LazyMap";
-import { ErrorBox, Loading, Segmented } from "../components/ui";
+import { CandidatePicker, ErrorBox, Loading, MunicipioSelect, Segmented, nomeCand } from "../components/ui";
 import { cssRgb, prefersDark, type RGB } from "../lib/colors";
 import { useBase, useTotais, useVotos, type Base, type PorLocal } from "../lib/data";
 import type { ExportCol } from "../lib/export";
 import { dec, fmt, pct, titulo } from "../lib/format";
 import { L } from "../lib/i18n";
 import { CARGOS, type Candidatura, type TotaisCols, type VotosCols } from "../lib/types";
-import { MOBILIZACAO, NOME_FAIXA, agrega, linha, nossasDaUf, useBaseCandidatura, type Faixa, type Linha, type LinhaNossa, type Terr } from "../lib/atuacao";
+import { MOBILIZACAO, NOME_FAIXA, agrega, linha, useBaseCandidatura, useCandidaturasAcompanhadas, type Faixa, type Linha, type LinhaNossa, type Terr } from "../lib/atuacao";
 import { useUf } from "../lib/uf";
+import { isDev, source } from "../lib/source";
+import { useSouAdmin } from "../lib/acessos";
+import type { AnaliseTerritorial } from "../lib/types";
+import { supabase } from "../lib/supabase";
 
 /*
- * Ainda há esperança: onde Lula foi bem votado e a abstenção foi alta, por cidade e bairro, para priorizar a virada no
- * 2º turno. Modelo simples e declarado: se uma parcela dos abstencionistas de um território votar como quem votou ali,
- * o saldo líquido para Lula é abstenções × (válidos/comparecimento) × (Lula − adversário). Prioridade = esse saldo.
+ * Mapa de Mobilização: compara duas candidaturas por cidade e bairro e simula o saldo líquido produzido pela
+ * mobilização de uma parcela dos abstencionistas, mantendo o padrão de voto observado no território.
  */
 
 // divergente laranja ↔ roxo (mesma paleta validada do Apocalipse): saldo negativo, nulo, positivo
@@ -26,22 +30,109 @@ const RAMPA = () => (prefersDark()
 
 export function Esperanca() {
   const base = useBase();
+  const { uf } = useUf();
+  const [modo, setModo] = useState<"predefinida" | "personalizada" | "salvas">("predefinida");
   const lula = base.data?.candidaturas.find((c) => c.cargo === 1 && c.numero === 13);
   const adv = base.data?.candidaturas.filter((c) => c.cargo === 1 && c.tipo === "nominal" && c.numero !== 13)
     .sort((a, b) => (Number(b.situacao === "2º turno") - Number(a.situacao === "2º turno")) || b.votos - a.votos)[0];
-  const votos = useVotos(lula && adv ? [lula.id, adv.id] : []);
-  const totais = useTotais(1);
   if (base.error) return <ErrorBox error={base.error} />;
-  if (votos.error) return <ErrorBox error={votos.error} />;
-  if (totais.error) return <ErrorBox error={totais.error} />;
-  if (!base.data || !votos.data || !totais.data || !lula || !adv) return <Loading />;
-  return <Painel base={base.data} lula={lula} adv={adv} votos={votos.data} totais={totais.data} />;
+  if (!base.data) return <Loading />;
+  return (
+    <div className="flex flex-col gap-5">
+      <Segmented label={L("Modo da análise", "Analysis mode")} value={modo} onChange={(v) => setModo(v as typeof modo)} options={[
+        { id: "predefinida", label: L("Predefinida", "Preset") },
+        { id: "personalizada", label: L("Personalizada", "Custom") },
+        { id: "salvas", label: L("Salvas", "Saved") },
+      ]} />
+      {modo === "predefinida" && (lula && adv
+        ? <Analise base={base.data} principal={lula} adversaria={adv} mobilizacao={MOBILIZACAO} municipio={null} predefinida />
+        : <p className="text-muted">{L("Duelo presidencial não disponível nesta UF.", "Presidential match-up unavailable in this state.")}</p>)}
+      {modo === "personalizada" && <EditorAnalise base={base.data} uf={uf} />}
+      {modo === "salvas" && <AnalisesSalvas base={base.data} uf={uf} />}
+      <GerenciarAcompanhadas base={base.data} />
+    </div>
+  );
 }
 
-function Painel({ base, lula, adv, votos, totais }: { base: Base; lula: Candidatura; adv: Candidatura; votos: Record<number, VotosCols>; totais: TotaisCols }) {
+function Analise({ base, principal, adversaria, mobilizacao, municipio, predefinida = false }: {
+  base: Base; principal: Candidatura; adversaria: Candidatura; mobilizacao: number; municipio: string | null; predefinida?: boolean;
+}) {
+  const votos = useVotos([principal.id, adversaria.id], municipio);
+  const totais = useTotais(principal.cargo, municipio);
+  if (votos.error) return <ErrorBox error={votos.error} />;
+  if (totais.error) return <ErrorBox error={totais.error} />;
+  if (!votos.data || !totais.data) return <Loading />;
+  return <Painel base={base} lula={principal} adv={adversaria} votos={votos.data} totais={totais.data}
+    mobilizacao={mobilizacao} municipio={municipio} predefinida={predefinida} />;
+}
+
+function EditorAnalise({ base, uf, inicial }: { base: Base; uf: string; inicial?: AnaliseTerritorial }) {
+  const qc = useQueryClient();
+  const [titulo_, setTitulo] = useState(inicial?.titulo ?? "");
+  const [cargo, setCargo] = useState(inicial?.cd_cargo ?? 1);
+  const [principal, setPrincipal] = useState<Candidatura | null>(inicial ? base.candById.get(inicial.candidatura_principal_id) ?? null : null);
+  const [adversaria, setAdversaria] = useState<Candidatura | null>(inicial ? base.candById.get(inicial.candidatura_adversaria_id) ?? null : null);
+  const [municipio, setMunicipio] = useState<string | null>(inicial?.cd_municipio ?? null);
+  const [mobilizacao, setMobilizacao] = useState(Math.round((inicial?.mobilizacao ?? MOBILIZACAO) * 100));
+  const salvar = useMutation({
+    mutationFn: () => source.salvarAnaliseTerritorial({ id: inicial?.id, titulo: titulo_.trim(), uf, cd_cargo: cargo,
+      candidatura_principal_id: principal!.id, candidatura_adversaria_id: adversaria!.id, cd_municipio: municipio,
+      mobilizacao: mobilizacao / 100 }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["analises-territoriais", uf] }),
+  });
+  const cargos = [...new Set(base.candidaturas.filter((c) => c.tipo === "nominal").map((c) => c.cargo))].sort((a, b) => a - b);
+  const validos = principal && adversaria && principal.id !== adversaria.id && principal.cargo === cargo && adversaria.cargo === cargo
+    && principal.eleicao === adversaria.eleicao;
+  const trocarCargo = (n: number) => { setCargo(n); setPrincipal(null); setAdversaria(null); };
+  return (
+    <div className="flex flex-col gap-4">
+      <form className="grid gap-3 rounded-lg border border-line bg-panel p-4 md:grid-cols-2" onSubmit={(e) => { e.preventDefault(); if (validos && titulo_.trim()) salvar.mutate(); }}>
+        <label className="flex flex-col gap-1 text-sm text-muted">{L("Título", "Title")}<input value={titulo_} maxLength={120} required onChange={(e) => setTitulo(e.target.value)} className="rounded-md border border-line bg-bg px-3 py-2 text-ink" /></label>
+        <label className="flex flex-col gap-1 text-sm text-muted">{L("Cargo", "Office")}<select value={cargo} onChange={(e) => trocarCargo(Number(e.target.value))} className="rounded-md border border-line bg-bg px-3 py-2 text-ink">{cargos.map((c) => <option key={c} value={c}>{CARGOS[c]}</option>)}</select></label>
+        <div className="text-sm text-muted">{L("Candidato principal", "Main candidate")}<CandidatePicker id="principal" base={base} cargo={cargo} onPick={setPrincipal} />{principal && <div className="mt-1 text-ink">{nomeCand(principal)} · {principal.partido}</div>}</div>
+        <div className="text-sm text-muted">{L("Adversário", "Opponent")}<CandidatePicker id="adversaria" base={base} cargo={cargo} onPick={setAdversaria} />{adversaria && <div className="mt-1 text-ink">{nomeCand(adversaria)} · {adversaria.partido}</div>}</div>
+        <MunicipioSelect base={base} value={municipio} onChange={setMunicipio} id="municipio-mobilizacao" />
+        <label className="flex flex-col gap-1 text-sm text-muted">{L("Mobilização simulada", "Simulated turnout gain")}<input type="number" min={1} max={100} value={mobilizacao} onChange={(e) => setMobilizacao(Math.min(100, Math.max(1, Number(e.target.value))))} className="rounded-md border border-line bg-bg px-3 py-2 text-ink" /><span>%</span></label>
+        {principal?.id === adversaria?.id && <p className="text-sm text-danger">{L("Escolha candidatos diferentes.", "Choose different candidates.")}</p>}
+        {principal && adversaria && principal.eleicao !== adversaria.eleicao && <p className="text-sm text-danger">{L("As candidaturas pertencem a eleições diferentes.", "The candidacies belong to different elections.")}</p>}
+        {salvar.error && <ErrorBox error={salvar.error} />}
+        <div className="flex gap-2 md:col-span-2"><button type="submit" disabled={!validos || !titulo_.trim() || salvar.isPending} className="rounded-md bg-accent px-4 py-2 font-semibold text-panel disabled:opacity-40">{L("Salvar para a equipe", "Save for team")}</button></div>
+      </form>
+      {validos && <Analise base={base} principal={principal} adversaria={adversaria} mobilizacao={mobilizacao / 100} municipio={municipio} />}
+    </div>
+  );
+}
+
+function AnalisesSalvas({ base, uf }: { base: Base; uf: string }) {
+  const q = useQuery({ queryKey: ["analises-territoriais", uf], queryFn: () => source.analisesTerritoriais() });
+  const admin = useSouAdmin();
+  const me = useQuery({ queryKey: ["usuario-atual"], queryFn: async () => isDev ? "dev" : (await supabase().auth.getUser()).data.user?.id ?? null, staleTime: Infinity });
+  const qc = useQueryClient();
+  const [aberta, setAberta] = useState<AnaliseTerritorial | null>(null);
+  const apagar = useMutation({ mutationFn: (id: string) => source.apagarAnaliseTerritorial(id), onSuccess: () => { setAberta(null); void qc.invalidateQueries({ queryKey: ["analises-territoriais", uf] }); } });
+  if (q.error) return <ErrorBox error={q.error} />;
+  if (q.isLoading) return <Loading />;
+  if (aberta) {
+    const principal = base.candById.get(aberta.candidatura_principal_id), adversaria = base.candById.get(aberta.candidatura_adversaria_id);
+    const podeEditar = aberta.autor === me.data;
+    const podeExcluir = podeEditar || admin.data;
+    return <div className="flex flex-col gap-3"><button className="self-start text-accent" onClick={() => setAberta(null)}>← {L("Voltar às análises", "Back to analyses")}</button>
+      {podeEditar ? <EditorAnalise base={base} uf={uf} inicial={aberta} /> : principal && adversaria
+        ? <Analise base={base} principal={principal} adversaria={adversaria} mobilizacao={Number(aberta.mobilizacao)} municipio={aberta.cd_municipio} />
+        : <ErrorBox error={L("Candidaturas da análise não encontradas.", "Analysis candidacies not found.")} />}
+      {podeExcluir && <button className="self-start text-danger" onClick={() => apagar.mutate(aberta.id)}>{L("Excluir análise", "Delete analysis")}</button>}{apagar.error && <ErrorBox error={apagar.error} />}</div>;
+  }
+  return <section className="flex flex-col gap-3"><h1 className="display text-3xl">{L("Análises salvas", "Saved analyses")}</h1>{!q.data?.length && <p className="text-muted">{L("Nenhuma análise salva.", "No saved analyses.")}</p>}<ul className="grid gap-2 md:grid-cols-2">{q.data?.map((a) => <li key={a.id}><button className="w-full rounded-lg border border-line bg-panel p-4 text-left hover:bg-accent-soft" onClick={() => setAberta(a)}><b>{a.titulo}</b><div className="text-sm text-muted">{CARGOS[a.cd_cargo]} · {pct(Number(a.mobilizacao), 0)}</div></button></li>)}</ul></section>;
+}
+
+function Painel({ base, lula, adv, votos, totais, mobilizacao, municipio, predefinida }: {
+  base: Base; lula: Candidatura; adv: Candidatura; votos: Record<number, VotosCols>; totais: TotaisCols;
+  mobilizacao: number; municipio: string | null; predefinida: boolean;
+}) {
   const { info, uf } = useUf();
   const vazio = { local: [], votos: [] };
   const vl = votos[lula.id] ?? vazio, va = votos[adv.id] ?? vazio;
+  const nomePrincipal = titulo(lula.nome);
   const nomeAdv = titulo(adv.nome);
 
   // locais (unidade mínima) para o cálculo da meta
@@ -59,13 +150,13 @@ function Painel({ base, lula, adv, votos, totais }: { base: Base; lula: Candidat
     return xs.length ? xs[Math.floor(xs.length / 2)] : 0;
   }, [porLocal]);
 
-  const cidades = useMemo(() => [...agrega(base, totais, vl, va, false).values()].map((t) => linha(t, medianaAbst)), [base, totais, vl, va, medianaAbst]);
-  const bairros = useMemo(() => [...agrega(base, totais, vl, va, true).values()].filter((t) => t.aptos >= 500).map((t) => linha(t, medianaAbst)), [base, totais, vl, va, medianaAbst]);
+  const cidades = useMemo(() => [...agrega(base, totais, vl, va, false).values()].map((t) => linha(t, medianaAbst, mobilizacao)), [base, totais, vl, va, medianaAbst, mobilizacao]);
+  const bairros = useMemo(() => [...agrega(base, totais, vl, va, true).values()].filter((t) => t.aptos >= 500).map((t) => linha(t, medianaAbst, mobilizacao)), [base, totais, vl, va, medianaAbst, mobilizacao]);
 
   // meta: quanto da abstenção nos locais onde Lula venceu fecha a diferença
-  const E = linha(estado, medianaAbst);
+  const E = linha(estado, medianaAbst, mobilizacao);
   const dif = estado.adv - estado.lula; // > 0: Lula atrás
-  const saldoTotal = porLocal.reduce((a, t) => { const x = linha(t, medianaAbst); return x.margem > 0 ? a + x.saldo / MOBILIZACAO : a; }, 0);
+  const saldoTotal = porLocal.reduce((a, t) => { const x = linha(t, medianaAbst, mobilizacao); return x.margem > 0 ? a + x.saldo / mobilizacao : a; }, 0);
   const abstLula = porLocal.reduce((a, t) => (t.lula > t.adv ? a + t.aptos - t.comp : a), 0);
   const precisa = dif > 0 && saldoTotal > 0 ? dif / saldoTotal : null;
 
@@ -80,19 +171,19 @@ function Painel({ base, lula, adv, votos, totais }: { base: Base; lula: Candidat
 
   const leitura: ReactNode[] = [];
   leitura.push(L(
-    <><b>Ponto de partida:</b> Lula {pct(E.sL, 1)} × {nomeAdv} {pct(E.sA, 1)} dos válidos no 1º turno {dif > 0 ? <>({fmt(dif)} votos atrás)</> : <>({fmt(-dif)} votos à frente)</>}. Abstenção de {pct(E.taxaAbst, 1)}: {fmt(E.abst)} eleitores não votaram.</>,
-    <><b>Starting point:</b> Lula {pct(E.sL, 1)} × {nomeAdv} {pct(E.sA, 1)} of valid votes in the 1st round {dif > 0 ? <>({fmt(dif)} votes behind)</> : <>({fmt(-dif)} votes ahead)</>}. Abstention {pct(E.taxaAbst, 1)}: {fmt(E.abst)} voters stayed home.</>));
+    <><b>Ponto de partida:</b> {nomePrincipal} {pct(E.sL, 1)} × {nomeAdv} {pct(E.sA, 1)} dos válidos {dif > 0 ? <>({fmt(dif)} votos atrás)</> : <>({fmt(-dif)} votos à frente)</>}. Abstenção de {pct(E.taxaAbst, 1)}: {fmt(E.abst)} eleitores não votaram.</>,
+    <><b>Starting point:</b> {nomePrincipal} {pct(E.sL, 1)} × {nomeAdv} {pct(E.sA, 1)} of valid votes {dif > 0 ? <>({fmt(dif)} votes behind)</> : <>({fmt(-dif)} votes ahead)</>}. Abstention {pct(E.taxaAbst, 1)}: {fmt(E.abst)} voters stayed home.</>));
   leitura.push(precisa == null
-    ? L(<><b>A meta:</b> Lula já está à frente no estado; a tarefa é ampliar e proteger a vantagem trazendo de volta parte dos {fmt(abstLula)} abstencionistas dos locais onde ele venceu.</>,
-      <><b>The goal:</b> Lula already leads in the state; the task is to widen and protect the lead by bringing back part of the {fmt(abstLula)} abstainers in the polling places he won.</>)
+    ? L(<><b>A meta:</b> {nomePrincipal} já está à frente; a tarefa é ampliar e proteger a vantagem trazendo de volta parte dos {fmt(abstLula)} abstencionistas dos locais onde venceu.</>,
+      <><b>The goal:</b> {nomePrincipal} already leads; the task is to widen and protect the lead by bringing back part of the {fmt(abstLula)} abstainers in the polling places won.</>)
     : precisa <= 1
-      ? L(<><b>A meta:</b> nos locais de votação em que Lula venceu, {fmt(abstLula)} eleitores se abstiveram. Se <b>{pct(precisa, 0)}</b> deles votarem como os vizinhos votaram, a diferença no estado fecha.</>,
-        <><b>The goal:</b> in the polling places Lula won, {fmt(abstLula)} voters abstained. If <b>{pct(precisa, 0)}</b> of them vote like their neighbours did, the statewide gap closes.</>)
-      : L(<><b>A meta:</b> mesmo trazendo todos os {fmt(abstLula)} abstencionistas dos locais em que Lula venceu, o saldo cobre {pct(1 / precisa, 0)} da diferença. A virada exige mobilização somada a persuasão nas cidades em disputa.</>,
-        <><b>The goal:</b> even bringing back all {fmt(abstLula)} abstainers in the places Lula won covers {pct(1 / precisa, 0)} of the gap. Turning it around needs mobilization plus persuasion in contested cities.</>));
+      ? L(<><b>A meta:</b> nos locais em que {nomePrincipal} venceu, {fmt(abstLula)} eleitores se abstiveram. Se <b>{pct(precisa, 0)}</b> deles repetirem o padrão local, a diferença fecha.</>,
+        <><b>The goal:</b> in polling places won by {nomePrincipal}, {fmt(abstLula)} voters abstained. If <b>{pct(precisa, 0)}</b> repeat the local pattern, the gap closes.</>)
+      : L(<><b>A meta:</b> mesmo mobilizando todos os {fmt(abstLula)} abstencionistas dos locais favoráveis, o saldo cobre {pct(1 / precisa, 0)} da diferença. A virada exige também persuasão.</>,
+        <><b>The goal:</b> even mobilizing all {fmt(abstLula)} abstainers in favourable places covers {pct(1 / precisa, 0)} of the gap. Turning it around also requires persuasion.</>));
   if (top5.length) leitura.push(L(
-    <><b>Prioridade 1 (mobilizar):</b> {top5.map((c) => c.cidade).join(", ")} concentram {pct(top5Share, 0)} do saldo potencial do estado. Cada 10% de abstencionistas que votam nelas rendem {fmt(Math.round(top5.reduce((a, c) => a + c.saldo, 0)))} votos líquidos para Lula.</>,
-    <><b>Priority 1 (mobilize):</b> {top5.map((c) => c.cidade).join(", ")} hold {pct(top5Share, 0)} of the state's potential. Every 10% of abstainers who turn out there yields {fmt(Math.round(top5.reduce((a, c) => a + c.saldo, 0)))} net votes for Lula.</>));
+    <><b>Prioridade 1 (mobilizar):</b> {top5.map((c) => c.cidade).join(", ")} concentram {pct(top5Share, 0)} do saldo potencial. Com {pct(mobilizacao, 0)} de mobilização, rendem {fmt(Math.round(top5.reduce((a, c) => a + c.saldo, 0)))} votos líquidos para {nomePrincipal}.</>,
+    <><b>Priority 1 (mobilize):</b> {top5.map((c) => c.cidade).join(", ")} hold {pct(top5Share, 0)} of the potential. At {pct(mobilizacao, 0)} turnout gain, they yield {fmt(Math.round(top5.reduce((a, c) => a + c.saldo, 0)))} net votes for {nomePrincipal}.</>));
   if (bairrosCap.length) leitura.push(L(
     <><b>Em {capital.cidade}:</b> os bairros com maior saldo são {bairrosCap.map((b) => `${b.bairro} (${fmt(Math.round(b.saldo))})`).join(", ")}. Porta a porta, transporte e mutirão de título/comparecimento nesses territórios.</>,
     <><b>In {capital.cidade}:</b> the neighbourhoods with the largest potential are {bairrosCap.map((b) => `${b.bairro} (${fmt(Math.round(b.saldo))})`).join(", ")}. Door-to-door, transport and turnout drives there.</>));
@@ -106,16 +197,16 @@ function Painel({ base, lula, adv, votos, totais }: { base: Base; lula: Candidat
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-2">
-        <div className="eyebrow">{L(`Estratégia de virada · ${info.nome} · 2º turno presidencial`, `Turnaround strategy · ${info.nome} · presidential runoff`)}</div>
-        <h1 className="display text-4xl md:text-5xl">{L("Ainda há esperança", "There is still hope")}</h1>
+        <div className="eyebrow">{predefinida ? L(`Estratégia de virada · ${info.nome} · 2º turno presidencial`, `Turnaround strategy · ${info.nome} · presidential runoff`) : L(`Análise territorial · ${municipio ? titulo(base.munByCd.get(municipio)?.nome ?? "") : info.nome} · ${CARGOS[lula.cargo]}`, `Territorial analysis · ${municipio ? titulo(base.munByCd.get(municipio)?.nome ?? "") : info.nome} · ${CARGOS[lula.cargo]}`)}</div>
+        <h1 className="display text-4xl md:text-5xl">{predefinida ? L("Mapa de Mobilização", "Mobilization Map") : `${nomePrincipal} × ${nomeAdv}`}</h1>
       </header>
 
       <section aria-label={L("Leitura", "Reading")} className="rounded-lg border-2 border-accent/60 bg-panel p-4">
         <h2 className="eyebrow mb-2 text-accent">{L("Plano de virada", "Turnaround plan")}</h2>
         <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm leading-relaxed">{leitura.map((x, i) => <li key={i}>{x}</li>)}</ul>
         <p className="mt-2 text-xs text-muted">
-          {L(`Modelo: saldo potencial = ${pct(MOBILIZACAO, 0)} dos abstencionistas × (válidos ÷ comparecimento) × (Lula − ${nomeAdv}), supondo que quem passa a votar vota como quem já votou no mesmo território. É uma régua para priorizar, não uma previsão: abstencionistas costumam ser mais pobres e mais jovens, o que tende a favorecer Lula, mas não há dado individual. Faixas: "mobilizar" = Lula à frente (≥10 p.p., ou à frente e com abstenção acima da mediana dos locais); "disputar" = margem de até 10 p.p.; "conter" = ${nomeAdv} à frente por mais de 10 p.p.`,
-            `Model: potential = ${pct(MOBILIZACAO, 0)} of abstainers × (valid ÷ turnout) × (Lula − ${nomeAdv}), assuming new voters vote like those who already voted in the same territory. A yardstick for prioritising, not a forecast: abstainers tend to be poorer and younger, which tends to favour Lula, but there is no individual-level data. Bands: "mobilize" = Lula ahead (≥10 pp, or ahead with abstention above the polling-place median); "contest" = within 10 pp; "contain" = ${nomeAdv} ahead by more than 10 pp.`)}
+          {L(`Simulação, não previsão: saldo potencial = ${pct(mobilizacao, 0)} dos abstencionistas × (válidos ÷ comparecimento) × (${nomePrincipal} − ${nomeAdv}), supondo que os novos votantes repitam o padrão do território. Faixas: "mobilizar" = ${nomePrincipal} à frente; "disputar" = margem menor que 10 p.p.; "conter" = ${nomeAdv} à frente por 10 p.p. ou mais.`,
+            `Simulation, not a forecast: potential = ${pct(mobilizacao, 0)} of abstainers × (valid ÷ turnout) × (${nomePrincipal} − ${nomeAdv}), assuming new voters repeat the territory's voting pattern. Bands: "mobilize" = ${nomePrincipal} ahead; "contest" = margin below 10 pp; "contain" = ${nomeAdv} ahead by 10 pp or more.`)}
         </p>
       </section>
 
@@ -129,18 +220,18 @@ function Painel({ base, lula, adv, votos, totais }: { base: Base; lula: Candidat
         ))}
       </div>
 
-      <Mapa base={base} cidades={cidades} />
-      <TabelaTerr titulo={L(`Prioridades por cidade — saldo potencial para Lula com ${pct(MOBILIZACAO, 0)} de mobilização`, `Priorities by city — potential net votes for Lula with ${pct(MOBILIZACAO, 0)} turnout gain`)}
-        linhas={cidades} nomeAdv={nomeAdv} arquivo="esperanca_cidades" />
+      <Mapa base={base} cidades={cidades} nomePrincipal={nomePrincipal} />
+      <TabelaTerr titulo={L(`Prioridades por cidade — saldo potencial para ${nomePrincipal} com ${pct(mobilizacao, 0)} de mobilização`, `Priorities by city — potential net votes for ${nomePrincipal} with ${pct(mobilizacao, 0)} turnout gain`)}
+        linhas={cidades} nomePrincipal={nomePrincipal} nomeAdv={nomeAdv} mobilizacao={mobilizacao} arquivo={`mapa_mobilizacao_${lula.numero}_cidades`} />
       <TabelaTerr titulo={L("Prioridades por bairro (todas as cidades; bairros com 500+ eleitores)", "Priorities by neighbourhood (all cities; neighbourhoods with 500+ voters)")}
-        linhas={bairros} nomeAdv={nomeAdv} arquivo="esperanca_bairros" bairro />
+        linhas={bairros} nomePrincipal={nomePrincipal} nomeAdv={nomeAdv} mobilizacao={mobilizacao} arquivo={`mapa_mobilizacao_${lula.numero}_bairros`} bairro />
 
-      <Nossas base={base} uf={uf} bairros={bairros} />
+      <Nossas base={base} bairros={bairros} nomePrincipal={nomePrincipal} mobilizacao={mobilizacao} />
     </div>
   );
 }
 
-function Mapa({ base, cidades }: { base: Base; cidades: Linha[] }) {
+function Mapa({ base, cidades, nomePrincipal }: { base: Base; cidades: Linha[]; nomePrincipal: string }) {
   const rampa = RAMPA();
   const porCd = useMemo(() => new Map(cidades.map((c) => [c.cd, c])), [cidades]);
   // mediana dos saldos positivos e dos negativos (em módulo): separa "alto" de "baixo" de cada lado
@@ -157,7 +248,7 @@ function Mapa({ base, cidades }: { base: Base; cidades: Linha[] }) {
   }, [porCd, cortes, rampa]);
   const info = useCallback(({ municipio }: { municipio?: string }) => {
     const c = municipio ? porCd.get(municipio) : undefined;
-    return c ? L(`Saldo potencial ${c.saldo > 0 ? "+" : ""}${fmt(Math.round(c.saldo))} · abstenção ${pct(c.taxaAbst, 1)} · Lula ${pct(c.sL, 1)} × ${pct(c.sA, 1)} · ${NOME_FAIXA(c.faixa)}`, `Potential ${c.saldo > 0 ? "+" : ""}${fmt(Math.round(c.saldo))} · abstention ${pct(c.taxaAbst, 1)} · Lula ${pct(c.sL, 1)} × ${pct(c.sA, 1)} · ${NOME_FAIXA(c.faixa)}`) : null;
+    return c ? `${nomePrincipal}: ${pct(c.sL, 1)} · ${L("saldo potencial", "potential")} ${c.saldo > 0 ? "+" : ""}${fmt(Math.round(c.saldo))} · ${L("abstenção", "abstention")} ${pct(c.taxaAbst, 1)} · ${NOME_FAIXA(c.faixa)}` : null;
   }, [porCd]);
   const vazio = useMemo<PorLocal>(() => ({ votos: new Float64Array(base.locais.length), validos: new Float64Array(base.locais.length), total: 0, totalValidos: 0 }), [base]);
   return (
@@ -175,7 +266,7 @@ function Mapa({ base, cidades }: { base: Base; cidades: Linha[] }) {
   );
 }
 
-function TabelaTerr({ titulo: tit, linhas, nomeAdv, arquivo, bairro = false }: { titulo: string; linhas: Linha[]; nomeAdv: string; arquivo: string; bairro?: boolean }) {
+function TabelaTerr({ titulo: tit, linhas, nomePrincipal, nomeAdv, mobilizacao, arquivo, bairro = false }: { titulo: string; linhas: Linha[]; nomePrincipal: string; nomeAdv: string; mobilizacao: number; arquivo: string; bairro?: boolean }) {
   const [faixa, setFaixa] = useState<"todas" | Faixa>("todas");
   const dados = useMemo(() => (faixa === "todas" ? linhas : linhas.filter((l) => l.faixa === faixa)), [linhas, faixa]);
   const columns = useMemo<ColumnDef<Linha, unknown>[]>(() => [
@@ -184,21 +275,21 @@ function TabelaTerr({ titulo: tit, linhas, nomeAdv, arquivo, bairro = false }: {
     { id: "aptos", accessorKey: "aptos", header: L("Eleitores", "Voters"), cell: (x) => fmt(Number(x.getValue())), meta: { numeric: true } },
     { id: "abst", accessorKey: "abst", header: L("Abstenções", "Abstentions"), cell: (x) => fmt(Number(x.getValue())), meta: { numeric: true } },
     { id: "taxaAbst", accessorKey: "taxaAbst", header: L("Abstenção", "Abstention"), cell: (x) => pct(Number(x.getValue()), 1), meta: { numeric: true } },
-    { id: "sL", accessorKey: "sL", header: "Lula", cell: (x) => pct(Number(x.getValue()), 1), meta: { numeric: true } },
+    { id: "sL", accessorKey: "sL", header: nomePrincipal, cell: (x) => pct(Number(x.getValue()), 1), meta: { numeric: true } },
     { id: "sA", accessorKey: "sA", header: nomeAdv, cell: (x) => pct(Number(x.getValue()), 1), meta: { numeric: true } },
     { id: "saldo", accessorKey: "saldo", header: L("Saldo potencial", "Potential"), cell: (x) => {
       const v = Math.round(Number(x.getValue()));
       return <span className={v > 0 ? "font-semibold text-accent" : "text-muted"}>{v > 0 ? "+" : ""}{fmt(v)}</span>;
     }, meta: { numeric: true } },
     { id: "faixa", accessorFn: (l) => NOME_FAIXA(l.faixa), header: L("Faixa", "Band") },
-  ], [bairro, nomeAdv]);
+  ], [bairro, nomePrincipal, nomeAdv]);
   const exportCols: ExportCol<Linha>[] = [
     ...(bairro ? [{ header: L("Bairro", "Neighbourhood"), value: (l: Linha) => l.bairro ?? "" }] : []),
     { header: L("Cidade", "City"), value: (l) => l.cidade }, { header: L("Locais de votação", "Polling places"), value: (l) => l.locais, type: "number" },
     { header: L("Eleitores", "Voters"), value: (l) => l.aptos, type: "number" }, { header: L("Abstenções", "Abstentions"), value: (l) => l.abst, type: "number" },
     { header: L("Taxa de abstenção", "Abstention rate"), value: (l) => l.taxaAbst, type: "percent" },
-    { header: L("Lula (% válidos)", "Lula (% valid)"), value: (l) => l.sL, type: "percent" }, { header: `${nomeAdv} (% válidos)`, value: (l) => l.sA, type: "percent" },
-    { header: L("Saldo potencial (10%)", "Potential (10%)"), value: (l) => Math.round(l.saldo), type: "number" }, { header: L("Faixa", "Band"), value: (l) => NOME_FAIXA(l.faixa) },
+    { header: `${nomePrincipal} (% válidos)`, value: (l) => l.sL, type: "percent" }, { header: `${nomeAdv} (% válidos)`, value: (l) => l.sA, type: "percent" },
+    { header: `${L("Saldo potencial", "Potential")} (${pct(mobilizacao, 0)})`, value: (l) => Math.round(l.saldo), type: "number" }, { header: L("Faixa", "Band"), value: (l) => NOME_FAIXA(l.faixa) },
   ];
   return (
     <section className="flex flex-col gap-2">
@@ -210,7 +301,7 @@ function TabelaTerr({ titulo: tit, linhas, nomeAdv, arquivo, bairro = false }: {
           { label: L("Maior saldo", "Largest potential"), sort: [{ id: "saldo", desc: true }] },
           { label: L("Mais abstenções", "Most abstentions"), sort: [{ id: "abst", desc: true }] },
           { label: L("Maior taxa de abstenção", "Highest abstention rate"), sort: [{ id: "taxaAbst", desc: true }] },
-          { label: L("Lula mais forte", "Lula strongest"), sort: [{ id: "sL", desc: true }] },
+          { label: `${nomePrincipal} ${L("mais forte", "strongest")}`, sort: [{ id: "sL", desc: true }] },
         ]} />
     </section>
   );
@@ -218,22 +309,21 @@ function TabelaTerr({ titulo: tit, linhas, nomeAdv, arquivo, bairro = false }: {
 
 // ---- onde nossas candidaturas podem atuar ----
 
-function Nossas({ base, uf, bairros }: { base: Base; uf: string; bairros: Linha[] }) {
-  const cands = nossasDaUf(base, uf);
+function Nossas({ base, bairros, nomePrincipal, mobilizacao }: { base: Base; bairros: Linha[]; nomePrincipal: string; mobilizacao: number }) {
+  const cands = useCandidaturasAcompanhadas(base);
   if (!cands.length) return null;
   return (
     <section aria-label={L("Onde nossas candidaturas podem atuar", "Where our candidacies can act")} className="flex flex-col gap-3">
       <h2 className="display text-2xl">{L("Onde nossas candidaturas podem atuar", "Where our candidacies can act")}</h2>
       <p className="text-sm text-muted">
-        {L("Cruzamento entre a base eleitoral de cada candidatura (bairros onde ela teve votação acima da sua média no estado) e o saldo potencial para Lula. São os territórios onde a candidatura tem rede e reconhecimento para puxar comparecimento no 2º turno.",
-          "Cross-reference between each candidacy's electoral base (neighbourhoods where it polled above its state average) and Lula's potential. These are the territories where the candidacy has network and recognition to drive runoff turnout.")}
+        {L(`Cruzamento entre a base eleitoral de cada candidatura e o saldo potencial para ${nomePrincipal}.`, `Cross-reference between each candidacy's electoral base and ${nomePrincipal}'s potential.`)}
       </p>
-      {cands.map((c) => <Nossa key={c.id} base={base} c={c} bairros={bairros} />)}
+      {cands.map((c) => <Nossa key={c.id} base={base} c={c} bairros={bairros} nomePrincipal={nomePrincipal} mobilizacao={mobilizacao} />)}
     </section>
   );
 }
 
-function Nossa({ base, c, bairros }: { base: Base; c: Candidatura; bairros: Linha[] }) {
+function Nossa({ base, c, bairros, nomePrincipal, mobilizacao }: { base: Base; c: Candidatura; bairros: Linha[]; nomePrincipal: string; mobilizacao: number }) {
   const { linhas: todas, loading } = useBaseCandidatura(base, c, bairros);
   const linhas = useMemo(() => (todas ?? []).filter((b) => b.saldo > 0), [todas]);
   const columns = useMemo<ColumnDef<LinhaNossa, unknown>[]>(() => [
@@ -242,15 +332,15 @@ function Nossa({ base, c, bairros }: { base: Base; c: Candidatura; bairros: Linh
     { id: "votosC", accessorKey: "votosC", header: L("Votos da candidatura", "Candidacy votes"), cell: (x) => fmt(Number(x.getValue())), meta: { numeric: true } },
     { id: "indice", accessorKey: "indice", header: L("Força relativa", "Relative strength"), cell: (x) => `${dec(Number(x.getValue()), 1)}×`, meta: { numeric: true } },
     { id: "abst", accessorKey: "abst", header: L("Abstenções", "Abstentions"), cell: (x) => fmt(Number(x.getValue())), meta: { numeric: true } },
-    { id: "sL", accessorKey: "sL", header: "Lula", cell: (x) => pct(Number(x.getValue()), 1), meta: { numeric: true } },
+    { id: "sL", accessorKey: "sL", header: nomePrincipal, cell: (x) => pct(Number(x.getValue()), 1), meta: { numeric: true } },
     { id: "saldo", accessorKey: "saldo", header: L("Saldo potencial", "Potential"), cell: (x) => <span className="font-semibold text-accent">+{fmt(Math.round(Number(x.getValue())))}</span>, meta: { numeric: true } },
     { id: "score", accessorKey: "score", header: L("Prioridade", "Priority"), cell: (x) => fmt(Math.round(Number(x.getValue()))), meta: { numeric: true } },
-  ], []);
+  ], [nomePrincipal]);
   const exportCols: ExportCol<LinhaNossa>[] = [
     { header: L("Bairro", "Neighbourhood"), value: (l) => l.bairro ?? "" }, { header: L("Cidade", "City"), value: (l) => l.cidade },
     { header: L("Votos da candidatura", "Candidacy votes"), value: (l) => l.votosC, type: "number" }, { header: L("Força relativa", "Relative strength"), value: (l) => l.indice, type: "number" },
-    { header: L("Abstenções", "Abstentions"), value: (l) => l.abst, type: "number" }, { header: L("Lula (% válidos)", "Lula (% valid)"), value: (l) => l.sL, type: "percent" },
-    { header: L("Saldo potencial (10%)", "Potential (10%)"), value: (l) => Math.round(l.saldo), type: "number" }, { header: L("Prioridade", "Priority"), value: (l) => Math.round(l.score), type: "number" },
+    { header: L("Abstenções", "Abstentions"), value: (l) => l.abst, type: "number" }, { header: `${nomePrincipal} (% válidos)`, value: (l) => l.sL, type: "percent" },
+    { header: `${L("Saldo potencial", "Potential")} (${pct(mobilizacao, 0)})`, value: (l) => Math.round(l.saldo), type: "number" }, { header: L("Prioridade", "Priority"), value: (l) => Math.round(l.score), type: "number" },
   ];
   const top = [...linhas].sort((a, b) => b.score - a.score).slice(0, 5);
   const somaSaldo = linhas.reduce((a, l) => a + l.saldo, 0);
@@ -260,11 +350,11 @@ function Nossa({ base, c, bairros }: { base: Base; c: Candidatura; bairros: Linh
       {loading ? <Loading /> : !linhas.length ? <p className="text-sm text-muted">{L("Sem bairros que combinem base forte e saldo positivo.", "No neighbourhoods combining a strong base and positive potential.")}</p> : (
         <>
           <p className="text-sm">
-            {L(<>{fmt(linhas.length)} bairros combinam base forte da candidatura e saldo positivo para Lula, somando <b>+{fmt(Math.round(somaSaldo))}</b> votos líquidos a cada 10% de mobilização. Começar por: {top.map((b) => `${b.bairro} (${b.cidade})`).join(", ")}.</>,
-              <>{fmt(linhas.length)} neighbourhoods combine a strong base for the candidacy and positive potential for Lula, adding up to <b>+{fmt(Math.round(somaSaldo))}</b> net votes per 10% turnout gain. Start with: {top.map((b) => `${b.bairro} (${b.cidade})`).join(", ")}.</>)}
+            {L(<>{fmt(linhas.length)} bairros combinam base forte da candidatura e saldo positivo para {nomePrincipal}, somando <b>+{fmt(Math.round(somaSaldo))}</b> votos líquidos com {pct(mobilizacao, 0)} de mobilização. Começar por: {top.map((b) => `${b.bairro} (${b.cidade})`).join(", ")}.</>,
+              <>{fmt(linhas.length)} neighbourhoods combine a strong candidacy base and positive potential for {nomePrincipal}, adding <b>+{fmt(Math.round(somaSaldo))}</b> net votes at {pct(mobilizacao, 0)} turnout gain. Start with: {top.map((b) => `${b.bairro} (${b.cidade})`).join(", ")}.</>)}
           </p>
           <DataTable titulo={L(`${titulo(c.nome)}: bairros de atuação prioritária no 2º turno`, `${titulo(c.nome)}: priority neighbourhoods for the runoff`)} data={linhas} columns={columns} exportCols={exportCols}
-            nomeArquivo={`esperanca_${c.numero}`} busca={(l) => `${l.bairro} ${l.cidade}`} initialSort={[{ id: "score", desc: true }]} pageSize={10}
+            nomeArquivo={`mapa_mobilizacao_${c.numero}`} busca={(l) => `${l.bairro} ${l.cidade}`} initialSort={[{ id: "score", desc: true }]} pageSize={10}
             atalhos={[
               { label: L("Prioridade", "Priority"), sort: [{ id: "score", desc: true }] },
               { label: L("Base mais forte", "Strongest base"), sort: [{ id: "indice", desc: true }] },
@@ -275,5 +365,34 @@ function Nossa({ base, c, bairros }: { base: Base; c: Candidatura; bairros: Linh
         </>
       )}
     </div>
+  );
+}
+
+function GerenciarAcompanhadas({ base }: { base: Base }) {
+  const admin = useSouAdmin();
+  const { uf } = useUf();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["candidaturas-acompanhadas", uf], queryFn: () => source.candidaturasAcompanhadas() });
+  const [selecionada, setSelecionada] = useState<Candidatura | null>(null);
+  const atualizar = () => void qc.invalidateQueries({ queryKey: ["candidaturas-acompanhadas", uf] });
+  const adicionar = useMutation({ mutationFn: () => source.salvarCandidaturaAcompanhada(selecionada!.id, (q.data?.length ?? 0) + 1), onSuccess: () => { setSelecionada(null); atualizar(); } });
+  const remover = useMutation({ mutationFn: (id: number) => source.removerCandidaturaAcompanhada(id), onSuccess: atualizar });
+  const mover = useMutation({ mutationFn: async ({ indice, delta }: { indice: number; delta: number }) => {
+    const itens = [...(q.data ?? [])].sort((a, b) => a.ordem - b.ordem), destino = indice + delta;
+    if (!itens[indice] || !itens[destino]) return;
+    await Promise.all([source.salvarCandidaturaAcompanhada(itens[indice].candidatura_id, destino + 1), source.salvarCandidaturaAcompanhada(itens[destino].candidatura_id, indice + 1)]);
+  }, onSuccess: atualizar });
+  if (!admin.data) return null;
+  const atuais = [...(q.data ?? [])].sort((a, b) => a.ordem - b.ordem).map((x) => ({ ...x, candidatura: base.candById.get(x.candidatura_id) })).filter((x) => x.candidatura);
+  return (
+    <details className="rounded-lg border border-line bg-panel p-4">
+      <summary className="cursor-pointer font-semibold">{L("Administrar candidaturas acompanhadas", "Manage tracked candidacies")}</summary>
+      <div className="mt-3 flex flex-col gap-3">
+        <CandidatePicker id="acompanhada" base={base} onPick={setSelecionada} />
+        {selecionada && <div className="flex items-center gap-2"><span>{nomeCand(selecionada)} · {selecionada.partido}</span><button className="rounded-md bg-accent px-3 py-1 text-panel" onClick={() => adicionar.mutate()} disabled={adicionar.isPending}>{L("Adicionar", "Add")}</button></div>}
+        <ul className="flex flex-col gap-1">{atuais.map((x, i) => <li key={x.candidatura_id} className="flex items-center justify-between gap-2 border-b border-line py-2"><span>{nomeCand(x.candidatura!)} · {x.candidatura!.partido}</span><span className="flex gap-2"><button disabled={i === 0} onClick={() => mover.mutate({ indice: i, delta: -1 })} aria-label={L("Mover para cima", "Move up")}>↑</button><button disabled={i === atuais.length - 1} onClick={() => mover.mutate({ indice: i, delta: 1 })} aria-label={L("Mover para baixo", "Move down")}>↓</button><button className="text-danger" onClick={() => remover.mutate(x.candidatura_id)}>{L("Remover", "Remove")}</button></span></li>)}</ul>
+        {(q.error || adicionar.error || remover.error || mover.error) && <ErrorBox error={q.error ?? adicionar.error ?? remover.error ?? mover.error} />}
+      </div>
+    </details>
   );
 }

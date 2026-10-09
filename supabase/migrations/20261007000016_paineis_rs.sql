@@ -21,6 +21,9 @@ from (values
 ) as v(titulo, ids, regra, mun, grupo, ordem)
 where exists (select 1 from public.candidaturas where uf = 'RS')
   and (cardinality(v.ids) > 0 or v.regra is not null)
+  and (v.mun is null or exists (
+    select 1 from public.municipios m where m.cd_municipio = v.mun
+  ))
   and not exists (select 1 from public.paineis p where p.titulo = v.titulo and p.autor is null and p.uf = 'RS');
 
 -- Um painel por cidade, nas 10 cidades com mais votos de cada uma.

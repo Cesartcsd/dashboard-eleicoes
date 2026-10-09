@@ -1,20 +1,18 @@
 import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { titulo } from "./format";
 import { L } from "./i18n";
 import { useBase, useTotais, useVotos, type Base } from "./data";
 import type { Candidatura, TotaisCols, VotosCols } from "./types";
+import { source } from "./source";
+import { useUf } from "./uf";
 
 /*
- * Base comum das abas "Ainda há esperança" e "Apocalipse": Lula × adversário do 2º turno por cidade/bairro, com abstenção,
+ * Base comum do Mapa de Mobilização e dos cards territoriais: candidatura principal × adversária por cidade/bairro, com abstenção,
  * e onde cada candidatura nossa tem base. Saldo potencial = MOBILIZACAO × abstenções × (válidos/comparecimento) × margem.
  */
 
 // candidaturas do PSOL em que a equipe atua (UF -> cargo:número)
-export const NOSSAS: Record<string, string[]> = {
-  SP: ["6:5005", "7:50000"],
-  MG: ["7:50099"],
-  RS: ["7:50123", "5:500"],
-};
 export const MOBILIZACAO = 0.1; // cenário: 10% dos abstencionistas passam a votar
 
 export type Faixa = "mobilizar" | "disputar" | "conter";
@@ -27,10 +25,10 @@ export interface LinhaNossa extends Linha { votosC: number; indice: number; scor
 
 export const NOME_FAIXA = (f: Faixa) => (f === "mobilizar" ? L("Mobilizar", "Mobilize") : f === "disputar" ? L("Disputar", "Contest") : L("Conter", "Contain"));
 
-export const linha = (t: Terr, medianaAbst: number): Linha => {
+export const linha = (t: Terr, medianaAbst: number, mobilizacao = MOBILIZACAO): Linha => {
   const abst = t.aptos - t.comp, taxaAbst = t.aptos ? abst / t.aptos : 0;
   const sL = t.validos ? t.lula / t.validos : 0, sA = t.validos ? t.adv / t.validos : 0, margem = sL - sA;
-  const saldo = MOBILIZACAO * abst * (t.comp ? t.validos / t.comp : 0) * margem;
+  const saldo = mobilizacao * abst * (t.comp ? t.validos / t.comp : 0) * margem;
   const faixa: Faixa = margem >= 0.1 && taxaAbst >= medianaAbst ? "mobilizar" : Math.abs(margem) < 0.1 ? "disputar" : margem > 0 ? "mobilizar" : "conter";
   return { ...t, abst, taxaAbst, sL, sA, margem, saldo, faixa };
 };
@@ -106,7 +104,10 @@ export function useBaseCandidatura(base: Base, c: Candidatura, bairros: Linha[])
   return { linhas: r?.linhas ?? null, shareLula: r?.shareLula ?? null, loading: v.isLoading || t.isLoading, error: v.error ?? t.error };
 }
 
-export function nossasDaUf(base: Base, uf: string): Candidatura[] {
-  return (NOSSAS[uf] ?? []).map((k) => { const [cg, n] = k.split(":").map(Number); return base.candidaturas.find((c) => c.cargo === cg && c.numero === n && c.tipo === "nominal"); })
+export function useCandidaturasAcompanhadas(base?: Base): Candidatura[] {
+  const { uf } = useUf();
+  const q = useQuery({ queryKey: ["candidaturas-acompanhadas", uf], queryFn: () => source.candidaturasAcompanhadas(), staleTime: 60_000 });
+  if (!base || !q.data) return [];
+  return [...q.data].sort((a, b) => a.ordem - b.ordem).map((x) => base.candById.get(x.candidatura_id))
     .filter((c): c is Candidatura => !!c);
 }

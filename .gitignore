@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 build/
 dist/
+/package-lock.json
 
 # Dados gerados pelo pipeline (podem ter dezenas de GB)
 data/*

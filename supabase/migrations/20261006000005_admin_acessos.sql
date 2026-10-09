@@ -3,8 +3,6 @@
 
 alter table public.emails_autorizados add column if not exists admin boolean not null default false;
 alter table public.emails_autorizados add column if not exists incluido_por text;
-update public.emails_autorizados set admin = true where email = 'luq.marqs@gmail.com';
-
 create or replace function public.email_atual()
 returns text language sql stable set search_path = public as $$
   select lower(coalesce(auth.jwt() ->> 'email', ''));

@@ -8,9 +8,6 @@ import { supabase } from "./supabase";
  * banco (dono_visitas); aqui é só para esconder a seção dos demais.
  */
 
-/** Único e-mail que vê o log; o mesmo da função dono_visitas() no banco. */
-export const DONO_VISITAS = "luq.marqs@gmail.com";
-
 export interface VisitaUsuario { email: string; admin: boolean; visitas: number; sessoes: number; dias_ativos: number; primeira: string | null; ultima: string | null; rotas: number }
 export interface VisitasResumo {
   desde: string;

@@ -41,6 +41,11 @@ INT_COLS = {"ano", "id", "cd_ibge", "nr_zona", "nr_local", "qt_secoes", "cd_elei
 FLOAT_COLS = {"lat", "lon"}
 BOOL_COLS = {"coord_aproximada"}
 ARRAY_COLS = {"locais": "int[]", "votos": "int[]"}
+ACOMPANHADAS = {
+    "SP": [(6, 5005), (7, 50000)],
+    "MG": [(7, 50099)],
+    "RS": [(7, 50123), (5, 500)],
+}
 
 VERSAO_SQL = ("INSERT INTO public.meta (chave, valor) VALUES ('versao_dados', to_char(now(), 'YYYYMMDDHH24MISS')) "
               "ON CONFLICT (chave) DO UPDATE SET valor = excluded.valor;")
@@ -58,6 +63,15 @@ def destaques_sql(uf: str) -> str:
     if not partes:
         return ""
     return ("INSERT INTO public.candidaturas_destaque (candidatura_id, ordem) " + " UNION ALL ".join(partes) +
+            " ON CONFLICT (candidatura_id) DO UPDATE SET ordem = excluded.ordem;")
+
+
+def acompanhadas_sql(uf: str) -> str:
+    partes = [f"SELECT id, {o} FROM public.candidaturas WHERE uf = '{uf}' AND cd_cargo = {c} "
+              f"AND tipo = 'nominal' AND numero = {n}" for o, (c, n) in enumerate(ACOMPANHADAS.get(uf, []), 1)]
+    if not partes:
+        return ""
+    return ("INSERT INTO public.candidaturas_acompanhadas (candidatura_id, ordem) " + " UNION ALL ".join(partes) +
             " ON CONFLICT (candidatura_id) DO UPDATE SET ordem = excluded.ordem;")
 
 
@@ -145,6 +159,9 @@ def load_via_cli(uf: str, src: Path, only: list[str] | None) -> None:
         dq = destaques_sql(uf)
         if dq:
             run_cli_sql(dq, "destaques")
+        aq = acompanhadas_sql(uf)
+        if aq:
+            run_cli_sql(aq, "candidaturas acompanhadas")
         run_cli_sql("ANALYZE public.votos_cand; ANALYZE public.totais_local; ANALYZE public.locais; "
                     "ANALYZE public.candidaturas;", "analyze")
     run_cli_sql(VERSAO_SQL, "versão dos dados")
@@ -192,6 +209,9 @@ def load_direct(uf: str, src: Path) -> None:
         dq = destaques_sql(uf)
         if dq:
             cur.execute(dq)
+        aq = acompanhadas_sql(uf)
+        if aq:
+            cur.execute(aq)
         cur.execute(VERSAO_SQL)
         conn.commit()
     print(f"ok em {time.time() - t0:.0f}s")

@@ -54,7 +54,7 @@ async function loadBase(): Promise<Base> {
     };
   });
   const candidaturas: Candidatura[] = c.id.map((id, i) => ({
-    id, cargo: c.cargo[i], tipo: c.tipo[i], numero: c.numero[i], nome: c.nome[i] ?? String(c.numero[i]),
+    id, eleicao: c.eleicao[i], cargo: c.cargo[i], tipo: c.tipo[i], numero: c.numero[i], nome: c.nome[i] ?? String(c.numero[i]),
     nomeCompleto: c.nomeCompleto[i], partido: c.partido[i], destinacao: c.destinacao[i], votos: c.votos[i],
     situacao: c.situacao?.[i] ?? null,
   }));

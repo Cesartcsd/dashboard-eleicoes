@@ -29,7 +29,6 @@ begin
     execute format('create policy "equipe le" on public.%I for select to authenticated using (public.autorizado())', t);
   end loop;
 end $$;
-
 drop policy if exists "autor cria" on public.paineis;
 create policy "autor cria" on public.paineis for insert to authenticated
   with check (autor = auth.uid() and public.autorizado());
@@ -39,5 +38,3 @@ create policy "autor edita" on public.paineis for update to authenticated
 drop policy if exists "autor apaga" on public.paineis;
 create policy "autor apaga" on public.paineis for delete to authenticated
   using (autor = auth.uid() and public.autorizado());
-
-insert into public.emails_autorizados (email) values ('luq.marqs@gmail.com') on conflict do nothing;

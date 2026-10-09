@@ -1,7 +1,7 @@
 -- Log de visitas ao painel: quem (e-mail autorizado), quando, qual rota, UF, idioma e tipo de aparelho.
 -- Não guarda IP nem user agent completo. A tabela é ilegível pela API (RLS sem políticas): o registro entra por
--- registrar_visita (qualquer e-mail autorizado, só o próprio) e a leitura sai por visitas_resumo, restrita a UM e-mail
--- (dono do painel), não a todos os administradores.
+-- registrar_visita (qualquer e-mail autorizado, só o próprio) e a leitura sai por visitas_resumo, restrita aos
+-- administradores cadastrados em emails_autorizados.
 
 create table if not exists public.visitas (
   id          bigint generated always as identity primary key,
@@ -29,10 +29,9 @@ begin
           left(p_lang, 5), left(p_dispositivo, 20), left(p_sessao, 40));
 end $$;
 
--- único e-mail que enxerga o log (pedido explícito); mudar aqui e em dashboard/src/lib/visitas.ts
 create or replace function public.dono_visitas()
 returns boolean language sql stable set search_path = public as $$
-  select public.email_atual() = 'luq.marqs@gmail.com';
+  select public.sou_admin();
 $$;
 
 create or replace function public.visitas_resumo(p_dias integer default 30)
@@ -40,7 +39,7 @@ returns json language plpgsql stable security definer set search_path = public a
 declare desde timestamptz := now() - make_interval(days => greatest(coalesce(p_dias, 30), 1));
 begin
   if not public.dono_visitas() then
-    raise exception 'só o dono do painel pode ver as visitas' using errcode = '42501';
+    raise exception 'só administradores podem ver as visitas' using errcode = '42501';
   end if;
   return json_build_object(
     'desde', desde,
@@ -71,7 +70,7 @@ returns integer language plpgsql security definer set search_path = public as $$
 declare n integer;
 begin
   if not public.dono_visitas() then
-    raise exception 'só o dono do painel pode apagar visitas' using errcode = '42501';
+    raise exception 'só administradores podem apagar visitas' using errcode = '42501';
   end if;
   delete from visitas where visto_em < now() - make_interval(days => greatest(coalesce(p_dias, 30), 1));
   get diagnostics n = row_count;

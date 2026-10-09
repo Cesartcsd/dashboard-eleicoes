@@ -96,7 +96,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--turno", type=int, default=1)
     p.add_argument("--dev-json", action="store_true",
                    help="só gera dashboard/dev-data/ (formato das funções do Supabase) a partir dos CSVs")
+    p.add_argument("--skip-geo", action="store_true",
+                   help="não sobrescreve os GeoJSON versionados (útil em cargas parciais de teste)")
+    p.add_argument("--validation-level", choices=("uf", "zona"), default="uf",
+                   help="nível oficial usado para validar os votos exportados")
+    p.add_argument("--municipio", help="código TSE do município (obrigatório na validação por zona)")
+    p.add_argument("--zona", type=int, help="zona eleitoral (obrigatória na validação por zona)")
     a = p.parse_args(argv)
+    if a.validation_level == "zona" and (not a.municipio or a.zona is None):
+        p.error("--municipio e --zona são obrigatórios com --validation-level zona")
     if a.dev_json:
         return export_dev_json(a.uf.upper())
     uf = a.uf.upper()
@@ -104,7 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     out = s.data_dir / "dashboard" / uf.lower()
     out.mkdir(parents=True, exist_ok=True)
     geo_out = GEO_OUT / uf.lower()
-    (geo_out / "territorios").mkdir(parents=True, exist_ok=True)
+    if not a.skip_geo:
+        (geo_out / "territorios").mkdir(parents=True, exist_ok=True)
 
     cad = s.raw_dir / "externo" / f"eleitorado_local_votacao_2026_{uf}.csv"
     if not cad.exists():
@@ -233,8 +242,11 @@ def main(argv: list[str] | None = None) -> int:
         GROUP BY 1, 2 ORDER BY 1, 2
       ) TO '{(out / "totais_local.csv").as_posix()}' (HEADER)""")
 
-    # conferência com o resultado oficial (nível UF)
+    # conferência com o resultado oficial
     comp = (s.validation_dir / "comparisons.parquet").as_posix()
+    scope = f"x.nivel = '{a.validation_level}' AND x.uf = '{uf}'"
+    if a.validation_level == "zona":
+        scope += f" AND x.municipio = '{a.municipio}' AND x.zona = {a.zona}"
     bad = con.sql(f"""
       WITH ours AS (
         SELECT c.CD_CARGO cd_cargo, c.NR_CANDIDATO numero, c.TP_VOTO tipo, SUM(v.votos) votos
@@ -242,16 +254,31 @@ def main(argv: list[str] | None = None) -> int:
         GROUP BY ALL
       )
       SELECT o.*, x.votos_oficial FROM ours o
-      JOIN read_parquet('{comp}') x ON x.nivel = 'uf' AND x.uf = '{uf}' AND x.cd_cargo = o.cd_cargo
+      JOIN read_parquet('{comp}') x ON {scope} AND x.cd_cargo = o.cd_cargo
         AND x.candidato = o.numero
         AND x.tipo = CASE o.tipo WHEN 'nominal' THEN 'candidato' ELSE 'legenda' END
       WHERE x.votos_oficial IS NOT NULL AND x.votos_oficial <> o.votos""").fetchall()
     if bad:
         print("DIVERGÊNCIAS com o oficial:", bad[:10])
         return 1
-    n_checked = con.sql(f"SELECT COUNT(*) FROM read_parquet('{comp}') WHERE nivel = 'uf' AND uf = '{uf}' "
-                        "AND tipo IN ('candidato', 'legenda') AND status = 'OK'").fetchone()[0]
-    print(f"conferência com o oficial: ok ({n_checked:,} totais de candidatura/legenda na UF)")
+    failures = con.sql(f"""
+      SELECT COUNT(*) FROM read_parquet('{comp}') x
+      WHERE {scope} AND status NOT IN ('OK', 'NULO_TECNICO')
+    """).fetchone()[0]
+    n_checked = con.sql(f"""
+      SELECT COUNT(*) FROM read_parquet('{comp}') x
+      WHERE {scope} AND tipo IN ('candidato', 'legenda') AND status = 'OK'
+    """).fetchone()[0]
+    if failures or not n_checked:
+        print(f"VALIDAÇÃO OFICIAL INCOMPLETA: falhas={failures}, comparações={n_checked}")
+        return 1
+    print(f"conferência com o oficial: ok ({n_checked:,} totais de candidatura/legenda; nível {a.validation_level})")
+
+    if a.skip_geo:
+        print("geo: preservado (--skip-geo)")
+        for f in sorted(out.glob("*.csv")):
+            print(f"  {f.name}: {f.stat().st_size / 1e6:.1f} MB")
+        return 0
 
     # --- geo: contornos e territórios eleitorais ------------------------------------------------
     feats = []
@@ -335,7 +362,7 @@ def export_dev_json(uf: str) -> int:
         "id": "id", "mun": "cd_municipio", "zona": "nr_zona", "nr": "nr_local", "nome": "nome", "end": "endereco",
         "bairro": "bairro", "lat": "lat", "lon": "lon", "aprox": "coord_aproximada", "secoes": "qt_secoes"}))
     dump(dest / "candidaturas.json", cols("SELECT * FROM candidaturas ORDER BY id", {
-        "id": "id", "cargo": "cd_cargo", "tipo": "tipo", "numero": "numero", "nome": "nm_urna",
+        "id": "id", "eleicao": "cd_eleicao", "cargo": "cd_cargo", "tipo": "tipo", "numero": "numero", "nome": "nm_urna",
         "nomeCompleto": "nm_candidato", "partido": "sg_partido", "destinacao": "destinacao", "votos": "votos_total",
         "situacao": "situacao"}))
     dump(dest / "municipios.json", cols("SELECT * FROM municipios ORDER BY cd_municipio", {

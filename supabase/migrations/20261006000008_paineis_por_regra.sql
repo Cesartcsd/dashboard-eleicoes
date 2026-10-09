@@ -28,4 +28,8 @@ from (values
          and ((cd_cargo = 6 and numero = 5005) or (cd_cargo = 7 and numero = 50000)) order by cd_cargo),
    null::jsonb, null::char(5))
 ) as v(titulo, ids, regra, mun)
-where not exists (select 1 from public.paineis p where p.titulo = v.titulo and p.autor is null);
+where (v.regra is not null or cardinality(v.ids) > 0)
+  and (v.mun is null or exists (
+    select 1 from public.municipios m where m.cd_municipio = v.mun
+  ))
+  and not exists (select 1 from public.paineis p where p.titulo = v.titulo and p.autor is null);

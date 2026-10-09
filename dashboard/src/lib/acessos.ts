@@ -13,7 +13,7 @@ const DEV_KEY = "acessos-dev";
 function devLista(): Acesso[] {
   try {
     return JSON.parse(localStorage.getItem(DEV_KEY) ?? "null") ??
-      [{ email: "luq.marqs@gmail.com", admin: true, incluido_em: new Date().toISOString(), incluido_por: null }];
+      [{ email: "admin@localhost", admin: true, incluido_em: new Date().toISOString(), incluido_por: null }];
   } catch {
     return [];
   }

@@ -1,6 +1,6 @@
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState, type ReactNode } from "react";
-import { BrowserRouter, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { UFS, useUf } from "./lib/uf";
 import { CandidatePanel } from "./pages/CandidatePanel";
 import { Comparativo } from "./pages/Comparativo";
@@ -12,7 +12,6 @@ import { Acessos } from "./pages/Acessos";
 import { Presidente } from "./pages/Presidente";
 import { Publicidade } from "./pages/Publicidade";
 import { DigitalMG } from "./pages/DigitalMG";
-import { Apocalipse } from "./pages/Apocalipse";
 import { Esperanca } from "./pages/Esperanca";
 import { useSouAdmin } from "./lib/acessos";
 import { registrarVisita } from "./lib/visitas";
@@ -22,7 +21,7 @@ import { supabase } from "./lib/supabase";
 
 const NAV_PT_EN: [string, string, string, boolean?][] = [
   ["/", "Visão geral", "Overview", true], ["/comparativo", "Comparativo", "Compare"], ["/dobrada", "Dobrada", "Joint ticket"],
-  ["/presidente", "Presidente", "President"], ["/publicidade", "Publicidade", "Paid ads"], ["/apocalipse", "Apocalipse", "Apocalypse"], ["/esperanca", "Ainda há esperança", "Still hope"], ["/paineis", "Painéis", "Panels"],
+  ["/presidente", "Presidente", "President"], ["/publicidade", "Publicidade", "Paid ads"], ["/mapa-mobilizacao", "Mapa de Mobilização", "Mobilization Map"], ["/paineis", "Painéis", "Panels"],
   ["/metodologia", "Metodologia", "Methodology"],
 ];
 const NAV_ITENS = () => NAV_PT_EN.map(([to, pt, en, end]) => ({ to, label: L(pt, en), end }));
@@ -80,64 +79,39 @@ function Shell({ children, onSair }: { children: ReactNode; onSair?: () => void 
 
 function Login() {
   const [email, setEmail] = useState("");
-  const [estado, setEstado] = useState<"idle" | "enviando" | "enviado" | "erro">("idle");
+  const [senha, setSenha] = useState("");
+  const [estado, setEstado] = useState<"idle" | "enviando" | "erro">("idle");
   const [erro, setErro] = useState("");
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
+    setErro("");
     setEstado("enviando");
-    const { error } = await supabase().auth.signInWithOtp({
-      // A conta é criada no primeiro acesso; os dados só aparecem para e-mails da lista autorizada (RLS).
-      email: email.trim(), options: { shouldCreateUser: true, emailRedirectTo: window.location.origin },
+    const { error } = await supabase().auth.signInWithPassword({
+      email: email.trim(), password: senha,
     });
     if (error) {
-      setErro(/rate limit/i.test(error.message)
-        ? L("Muitos pedidos de link agora. Espere alguns minutos e tente de novo; se você já recebeu um link antes, use o mais recente.",
-          "Too many link requests right now. Wait a few minutes and try again; if you already received a link, use the most recent one.")
-        : L(`Não foi possível enviar o link: ${error.message}`, `Could not send the link: ${error.message}`));
+      setErro(L("E-mail ou senha inválidos.", "Invalid email or password."));
       setEstado("erro");
-    } else setEstado("enviado");
-  };
-  const google = async () => {
-    setErro("");
-    // O acesso continua limitado aos e-mails da lista autorizada (RLS), qualquer que seja o login.
-    const { error } = await supabase().auth.signInWithOAuth({
-      provider: "google", options: { redirectTo: window.location.origin + window.location.pathname },
-    });
-    if (error) { setErro(L(`Não foi possível entrar com o Google: ${error.message}`, `Could not sign in with Google: ${error.message}`)); setEstado("erro"); }
+    } else setEstado("idle");
   };
   return (
     <div className="grid min-h-full place-items-center px-4">
       <form onSubmit={enviar} className="flex w-full max-w-sm flex-col gap-3 rounded-lg border border-line bg-panel p-6">
         <div className="eyebrow">{L("Acesso restrito à equipe", "Team-only access")}</div>
         <h1 className="display text-2xl">{L("Painel Eleitoral 2026", "Election Dashboard 2026")}</h1>
-        {estado === "enviado" ? (
-          <p role="status">{L("Enviamos um link de acesso para", "We sent a sign-in link to")} <b>{email}</b>. {L("Abra o e-mail neste mesmo navegador.", "Open the email in this same browser.")}</p>
-        ) : (
-          <>
-            <button type="button" onClick={() => void google()}
-              className="flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-2 font-semibold text-panel">
-              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden className="rounded-sm bg-white p-0.5">
-                <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.4h6.5a5.6 5.6 0 0 1-2.4 3.6v3h3.9c2.3-2.1 3.5-5.2 3.5-8.7z" />
-                <path fill="#34A853" d="M12 24c3.2 0 6-1.1 8-2.9l-3.9-3c-1.1.7-2.5 1.2-4.1 1.2-3.1 0-5.8-2.1-6.7-5H1.3v3.1A12 12 0 0 0 12 24z" />
-                <path fill="#FBBC05" d="M5.3 14.3a7.2 7.2 0 0 1 0-4.6V6.6h-4a12 12 0 0 0 0 10.8l4-3.1z" />
-                <path fill="#EA4335" d="M12 4.8c1.8 0 3.4.6 4.6 1.8l3.4-3.4A12 12 0 0 0 1.3 6.6l4 3.1c.9-2.9 3.6-4.9 6.7-4.9z" />
-              </svg>
-              {L("Entrar com Google", "Sign in with Google")}
-            </button>
-            <div className="flex items-center gap-2 text-xs text-muted" aria-hidden>
-              <span className="h-px flex-1 bg-line" />{L("ou receba um link por e-mail", "or get a link by email")}<span className="h-px flex-1 bg-line" />
-            </div>
-            <label htmlFor="email" className="flex flex-col gap-1 text-sm text-muted">{L("E-mail", "Email")}
-              <input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-                autoComplete="email" className="rounded-md border border-line bg-bg px-3 py-2 text-ink" />
-            </label>
-            <button type="submit" disabled={estado === "enviando"}
-              className="rounded-md border border-line px-4 py-2 font-semibold hover:bg-accent-soft disabled:opacity-50">
-              {estado === "enviando" ? L("Enviando…", "Sending…") : L("Receber link de acesso", "Send me a sign-in link")}
-            </button>
-            {estado === "erro" && <p className="text-sm text-danger" role="alert">{erro}</p>}
-          </>
-        )}
+        <label htmlFor="email" className="flex flex-col gap-1 text-sm text-muted">{L("E-mail", "Email")}
+          <input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email" className="rounded-md border border-line bg-bg px-3 py-2 text-ink" />
+        </label>
+        <label htmlFor="senha" className="flex flex-col gap-1 text-sm text-muted">{L("Senha", "Password")}
+          <input id="senha" type="password" required value={senha} onChange={(e) => setSenha(e.target.value)}
+            autoComplete="current-password" className="rounded-md border border-line bg-bg px-3 py-2 text-ink" />
+        </label>
+        <button type="submit" disabled={estado === "enviando"}
+          className="rounded-md bg-accent px-4 py-2 font-semibold text-panel disabled:opacity-50">
+          {estado === "enviando" ? L("Entrando…", "Signing in…") : L("Entrar", "Sign in")}
+        </button>
+        {estado === "erro" && <p className="text-sm text-danger" role="alert">{erro}</p>}
       </form>
     </div>
   );
@@ -162,8 +136,8 @@ function Rotas() {
       <Route path="/presidente" element={<Presidente />} />
       <Route path="/publicidade" element={<Publicidade />} />
       <Route path="/digital-mg" element={<DigitalMG />} />
-      <Route path="/apocalipse" element={<Apocalipse />} />
-      <Route path="/esperanca" element={<Esperanca />} />
+      <Route path="/mapa-mobilizacao" element={<Esperanca />} />
+      <Route path="/esperanca" element={<Navigate to="/mapa-mobilizacao" replace />} />
       <Route path="/paineis" element={<Paineis />} />
       <Route path="/paineis/:id" element={<PainelView />} />
       <Route path="/metodologia" element={<Metodologia />} />

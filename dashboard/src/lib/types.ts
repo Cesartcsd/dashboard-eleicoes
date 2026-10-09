@@ -17,6 +17,7 @@ export interface LocaisCols {
 
 export interface CandidaturasCols {
   id: number[];
+  eleicao: number[];
   cargo: number[];
   tipo: ("nominal" | "legenda")[];
   numero: number[];
@@ -98,6 +99,7 @@ export interface Local {
 
 export interface Candidatura {
   id: number;
+  eleicao: number;
   cargo: number;
   tipo: "nominal" | "legenda";
   numero: number;
@@ -107,6 +109,25 @@ export interface Candidatura {
   destinacao: string | null;
   votos: number;
   situacao: string | null;
+}
+
+export interface AnaliseTerritorial {
+  id: string;
+  titulo: string;
+  uf: string;
+  cd_cargo: number;
+  candidatura_principal_id: number;
+  candidatura_adversaria_id: number;
+  cd_municipio: string | null;
+  mobilizacao: number;
+  autor: string;
+  criado_em?: string;
+  atualizado_em?: string;
+}
+
+export interface CandidaturaAcompanhada {
+  candidatura_id: number;
+  ordem: number;
 }
 
 export interface Municipio {

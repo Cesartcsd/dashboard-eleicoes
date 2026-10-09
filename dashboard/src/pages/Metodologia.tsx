@@ -79,7 +79,7 @@ export function Metodologia() {
           pago e temas só das candidaturas eleitas (as únicas coletadas), com custo por mil alcançados = Σ gasto ÷ Σ alcance × 1.000.
           Gasto por voto não mede efeito: quem anuncia mais costuma já ser mais forte.</li>
       </ul>
-      <h2 className="display text-xl">Ainda há esperança (2º turno)</h2>
+      <h2 className="display text-xl">Mapa de Mobilização</h2>
       <ul className="list-disc pl-5">
         <li><b>Saldo potencial</b> de um território = 10% dos abstencionistas × (válidos ÷ comparecimento) × (% Lula − % adversário),
           supondo que quem passa a votar vota como quem já votou ali. É uma régua para ordenar prioridades, não uma previsão: a abstenção
@@ -189,7 +189,7 @@ function MetodologiaEn() {
           themes only for elected candidacies (the only ones collected), with cost per 1,000 reached = Σ spend ÷ Σ reach × 1,000. Spend
           per vote does not measure effect: those who advertise more are usually already stronger.</li>
       </ul>
-      <h2 className="display text-xl">Still hope (runoff)</h2>
+      <h2 className="display text-xl">Mobilization Map</h2>
       <ul className="list-disc pl-5">
         <li><b>Potential</b> of a territory = 10% of abstainers × (valid ÷ turnout) × (% Lula − % opponent), assuming new voters vote
           like those who already voted there. A yardstick for ranking priorities, not a forecast: abstention tends to be higher among

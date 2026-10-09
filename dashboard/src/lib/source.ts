@@ -3,7 +3,7 @@
  * no desenvolvimento local (VITE_DATA_SOURCE=dev), arquivos de dev-data/ no mesmo formato.
  */
 import type {
-  CandidaturasCols, Config, LocaisCols, MunicipiosCols, Painel, TopCandidatura, TotaisCols, VotosCols,
+  AnaliseTerritorial, CandidaturaAcompanhada, CandidaturasCols, Config, LocaisCols, MunicipiosCols, Painel, TopCandidatura, TotaisCols, VotosCols,
 } from "./types";
 import { supabase } from "./supabase";
 import { getUf } from "./uf";
@@ -184,6 +184,12 @@ export interface DataSource {
   paineis(): Promise<Painel[]>;
   salvarPainel(p: Omit<Painel, "id"> & { id?: string }): Promise<Painel>;
   apagarPainel(id: string): Promise<void>;
+  analisesTerritoriais(): Promise<AnaliseTerritorial[]>;
+  salvarAnaliseTerritorial(a: Omit<AnaliseTerritorial, "id" | "autor"> & { id?: string }): Promise<AnaliseTerritorial>;
+  apagarAnaliseTerritorial(id: string): Promise<void>;
+  candidaturasAcompanhadas(): Promise<CandidaturaAcompanhada[]>;
+  salvarCandidaturaAcompanhada(id: number, ordem: number): Promise<void>;
+  removerCandidaturaAcompanhada(id: number): Promise<void>;
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -200,6 +206,11 @@ async function rpc<T>(fn: string, args?: Record<string, unknown>): Promise<T> {
   const { data, error } = await supabase().rpc(fn, args);
   if (error || data == null) rpcError(fn, error);
   return data as T;
+}
+
+async function rpcVoid(fn: string, args?: Record<string, unknown>): Promise<void> {
+  const { error } = await supabase().rpc(fn, args);
+  if (error) throw new Error(error.message);
 }
 
 /** Filtra um VotosCols completo para os locais de um município (modo dev). */
@@ -234,6 +245,8 @@ async function devMunSet(cd?: string | null): Promise<Set<number> | null> {
 }
 
 const paineisKey = () => `paineis-dev-${getUf()}`;
+const analisesKey = () => `analises-territoriais-dev-${getUf()}`;
+const acompanhadasKey = () => `candidaturas-acompanhadas-dev-${getUf()}`;
 const PAINEIS_PADRAO: Painel[] = [
   { id: "padrao-psol", titulo: "PSOL · 10 mais votados (federal e estadual)", candidatura_ids: [],
     regra: { partido: "PSOL", cargos: [6, 7], top: 10 }, cd_municipio: null, grupo: "PSOL · comparativos", ordem: 1 },
@@ -403,6 +416,41 @@ const dev: DataSource = {
       /* ignora */
     }
   },
+  async analisesTerritoriais() {
+    try { return JSON.parse(localStorage.getItem(analisesKey()) ?? "[]") as AnaliseTerritorial[]; } catch { return []; }
+  },
+  async salvarAnaliseTerritorial(a) {
+    const all = await dev.analisesTerritoriais();
+    const now = new Date().toISOString();
+    const item: AnaliseTerritorial = { ...a, id: a.id ?? crypto.randomUUID(), autor: "dev", atualizado_em: now,
+      criado_em: all.find((x) => x.id === a.id)?.criado_em ?? now };
+    localStorage.setItem(analisesKey(), JSON.stringify([item, ...all.filter((x) => x.id !== item.id)]));
+    return item;
+  },
+  async apagarAnaliseTerritorial(id) {
+    const all = await dev.analisesTerritoriais();
+    localStorage.setItem(analisesKey(), JSON.stringify(all.filter((x) => x.id !== id)));
+  },
+  async candidaturasAcompanhadas() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(acompanhadasKey()) ?? "null") as CandidaturaAcompanhada[] | null;
+      if (saved) return saved;
+    } catch { /* usa os padrões abaixo */ }
+    const defaults: Record<string, [number, number][]> = { SP: [[6, 5005], [7, 50000]], MG: [[7, 50099]], RS: [[7, 50123], [5, 500]] };
+    const c = await dev.candidaturas();
+    return (defaults[getUf()] ?? []).flatMap(([cargo, numero], i) => {
+      const j = c.id.findIndex((_, k) => c.cargo[k] === cargo && c.numero[k] === numero && c.tipo[k] === "nominal");
+      return j < 0 ? [] : [{ candidatura_id: c.id[j], ordem: i + 1 }];
+    });
+  },
+  async salvarCandidaturaAcompanhada(id, ordem) {
+    const all = await dev.candidaturasAcompanhadas();
+    localStorage.setItem(acompanhadasKey(), JSON.stringify([...all.filter((x) => x.candidatura_id !== id), { candidatura_id: id, ordem }]));
+  },
+  async removerCandidaturaAcompanhada(id) {
+    const all = await dev.candidaturasAcompanhadas();
+    localStorage.setItem(acompanhadasKey(), JSON.stringify(all.filter((x) => x.candidatura_id !== id)));
+  },
 };
 
 const remote: DataSource = {
@@ -472,6 +520,33 @@ const remote: DataSource = {
     const { error } = await supabase().from("paineis").delete().eq("id", id);
     if (error) rpcError(L("apagar painel", "delete dashboard"), error);
   },
+  async analisesTerritoriais() {
+    const { data, error } = await supabase().from("analises_territoriais").select("*").eq("uf", getUf())
+      .order("atualizado_em", { ascending: false });
+    if (error) rpcError(L("análises territoriais", "territorial analyses"), error);
+    return (data ?? []) as AnaliseTerritorial[];
+  },
+  async salvarAnaliseTerritorial(a) {
+    const row = { titulo: a.titulo, uf: getUf(), cd_cargo: a.cd_cargo,
+      candidatura_principal_id: a.candidatura_principal_id, candidatura_adversaria_id: a.candidatura_adversaria_id,
+      cd_municipio: a.cd_municipio, mobilizacao: a.mobilizacao };
+    const q = a.id ? supabase().from("analises_territoriais").update(row).eq("id", a.id) : supabase().from("analises_territoriais").insert(row);
+    const { data, error } = await q.select("*").single();
+    if (error || !data) rpcError(L("salvar análise territorial", "save territorial analysis"), error);
+    return data as AnaliseTerritorial;
+  },
+  async apagarAnaliseTerritorial(id) {
+    const { error } = await supabase().from("analises_territoriais").delete().eq("id", id);
+    if (error) rpcError(L("apagar análise territorial", "delete territorial analysis"), error);
+  },
+  async candidaturasAcompanhadas() {
+    const { data, error } = await supabase().from("candidaturas_acompanhadas").select("candidatura_id, ordem")
+      .order("ordem");
+    if (error) rpcError(L("candidaturas acompanhadas", "tracked candidacies"), error);
+    return (data ?? []) as CandidaturaAcompanhada[];
+  },
+  salvarCandidaturaAcompanhada: (id, ordem) => rpcVoid("salvar_candidatura_acompanhada", { p_candidatura_id: id, p_ordem: ordem }),
+  removerCandidaturaAcompanhada: (id) => rpcVoid("remover_candidatura_acompanhada", { p_candidatura_id: id }),
 };
 
 export const source: DataSource = isDev ? dev : remote;

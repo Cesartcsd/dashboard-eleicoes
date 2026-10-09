@@ -1,26 +1,24 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { nossasDaUf, useBairrosDuelo, useBaseCandidatura, useDuelo, type Linha } from "../lib/atuacao";
+import { useBairrosDuelo, useBaseCandidatura, useCandidaturasAcompanhadas, useDuelo, type Linha } from "../lib/atuacao";
 import type { Base } from "../lib/data";
 import { dec, fmt, pct, titulo } from "../lib/format";
 import { L } from "../lib/i18n";
 import { CARGOS, type Candidatura } from "../lib/types";
-import { useUf } from "../lib/uf";
 
 /** Um card por candidatura nossa na UF: o que fazer no 2º turno e onde (bairros da base cruzados com Lula × adversário). */
 export function CardsAtuacao() {
-  const { uf } = useUf();
   const d = useDuelo();
   const duelo = useBairrosDuelo(d.base.data, d.lula, d.adv, d.votos.data, d.totais.data);
   const base = d.base.data;
+  const cands = useCandidaturasAcompanhadas(base);
   if (!base) return null;
-  const cands = nossasDaUf(base, uf);
   if (!cands.length) return null;
   return (
     <section aria-label={L("O que nossas candidaturas podem fazer", "What our candidacies can do")} className="flex flex-col gap-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="display text-2xl">{L("O que nossas candidaturas podem fazer, e onde", "What our candidacies can do, and where")}</h2>
-        <Link to="/esperanca" className="text-sm text-accent">{L("detalhes por bairro em Ainda há esperança →", "neighbourhood detail in Still hope →")}</Link>
+        <Link to="/mapa-mobilizacao" className="text-sm text-accent">{L("detalhes no Mapa de Mobilização →", "details in the Mobilization Map →")}</Link>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         {cands.map((c) => duelo && d.adv
