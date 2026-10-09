@@ -26,8 +26,6 @@ from tse2026.config import get_settings
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from export_dashboard import DESTAQUES  # noqa: E402
-
 csv.field_size_limit(1 << 30)
 
 TABLES = {  # tabela -> chave do upsert
@@ -55,15 +53,6 @@ def limpar_uf_sql(uf: str) -> str:
     """Remove votos e totais da UF (serão recarregados)."""
     return (f"DELETE FROM public.votos_cand WHERE candidatura_id IN (SELECT id FROM public.candidaturas WHERE uf = '{uf}'); "
             f"DELETE FROM public.totais_local WHERE local_id IN (SELECT id FROM public.locais WHERE uf = '{uf}');")
-
-
-def destaques_sql(uf: str) -> str:
-    partes = [f"SELECT id, {o} FROM public.candidaturas WHERE uf = '{uf}' AND cd_cargo = {c} AND tipo = 'nominal' "
-              f"AND numero = {n}" for o, (c, n) in enumerate(DESTAQUES.get(uf, []), 1)]
-    if not partes:
-        return ""
-    return ("INSERT INTO public.candidaturas_destaque (candidatura_id, ordem) " + " UNION ALL ".join(partes) +
-            " ON CONFLICT (candidatura_id) DO UPDATE SET ordem = excluded.ordem;")
 
 
 def acompanhadas_sql(uf: str) -> str:
@@ -156,9 +145,6 @@ def load_via_cli(uf: str, src: Path, only: list[str] | None) -> None:
                 run_cli_sql(upsert_sql(table, None, header, lote), f"{table} lote {i}")
                 feitos += len(lote)
             print(f"  {table}: {feitos:,} linhas ({time.time() - t0:.0f}s)", flush=True)
-        dq = destaques_sql(uf)
-        if dq:
-            run_cli_sql(dq, "destaques")
         aq = acompanhadas_sql(uf)
         if aq:
             run_cli_sql(aq, "candidaturas acompanhadas")
@@ -206,9 +192,6 @@ def load_direct(uf: str, src: Path) -> None:
         cur.execute(limpar_uf_sql(uf))
         copy_csv(cur, "public.totais_local", src / "totais_local.csv")
         copy_csv(cur, "public.votos_cand", src / "votos_cand.csv")
-        dq = destaques_sql(uf)
-        if dq:
-            cur.execute(dq)
         aq = acompanhadas_sql(uf)
         if aq:
             cur.execute(aq)

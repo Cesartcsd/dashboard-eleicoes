@@ -45,7 +45,7 @@ export function Publicidade() {
   const b = base.data;
   const r = resumo.data;
   const comAnuncios = r.candidaturas.filter((c) => c.anuncios > 0 && b.candById.has(c.candidatura_id));
-  const padrao = comAnuncios.find((c) => b.candidaturasDestaque.includes(c.candidatura_id)) ?? comAnuncios[0];
+  const padrao = [...comAnuncios].sort((a, b_) => b_.anuncios - a.anuncios || a.candidatura_id - b_.candidatura_id)[0];
   const candId = Number(sp.get("c")) || padrao?.candidatura_id;
   const cand = candId ? b.candById.get(candId) : undefined;
   const item = r.candidaturas.find((c) => c.candidatura_id === candId);

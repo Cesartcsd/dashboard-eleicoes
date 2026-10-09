@@ -24,11 +24,8 @@ const nivelDe = (v: number, [t1, t2]: [number, number]) => (v > t2 ? 2 : v > t1 
 export function Dobrada() {
   const [sp, setSp] = useSearchParams();
   const base = useBase();
-  const destaque = base.data?.candidaturasDestaque ?? [];
-  // Padrão: as duas candidaturas em destaque; com uma só, cruza com o Lula (presidente).
-  const lula = base.data?.candidaturas.find((c) => c.cargo === 1 && c.numero === 13 && c.tipo === "nominal")?.id;
-  const aId = Number(sp.get("a") ?? (destaque.length > 1 ? destaque[1] : lula) ?? destaque[0]);
-  const bId = Number(sp.get("b") ?? destaque[0]);
+  const aId = sp.get("a") ? Number(sp.get("a")) : Number.NaN;
+  const bId = sp.get("b") ? Number(sp.get("b")) : Number.NaN;
   const municipio = sp.get("mun");
   const modo = (sp.get("modo") === "territorios" && municipio ? "territorios" : "escolas") as "escolas" | "territorios";
   const set = (k: string, v: string | null) => {
@@ -84,7 +81,8 @@ export function Dobrada() {
       <header>
         <div className="eyebrow">{L("Dobrada", "Joint ticket")}</div>
         <h1 className="display text-3xl">
-          {a ? <>{nomeCand(a)}<SituacaoBadge c={a} compacto /></> : "?"} × {b ? <>{nomeCand(b)}<SituacaoBadge c={b} compacto /></> : "?"}
+          {a && b ? <><>{nomeCand(a)}<SituacaoBadge c={a} compacto /></> × <>{nomeCand(b)}<SituacaoBadge c={b} compacto /></></>
+            : L("Escolha duas candidaturas", "Choose two candidacies")}
         </h1>
         <p className="max-w-3xl text-muted">
           {L(
@@ -95,13 +93,17 @@ export function Dobrada() {
       </header>
       <div className="grid gap-3 md:grid-cols-3">
         <div><div className="mb-1 text-sm text-muted">{L("Candidatura A (eixo roxo)", "Candidate A (purple axis)")}</div>
-          <CandidatePicker id="pick-a" base={B} onPick={(c) => set("a", String(c.id))} placeholder={a ? nomeCand(a) : L("Escolher…", "Choose…")} /></div>
+          <CandidatePicker id="pick-a" base={B} somenteNominais onPick={(c) => set("a", String(c.id))} placeholder={a ? nomeCand(a) : L("Escolher…", "Choose…")} /></div>
         <div><div className="mb-1 text-sm text-muted">{L("Candidatura B (eixo verde-azulado)", "Candidate B (teal axis)")}</div>
-          <CandidatePicker id="pick-b" base={B} onPick={(c) => set("b", String(c.id))} placeholder={b ? nomeCand(b) : L("Escolher…", "Choose…")} /></div>
+          <CandidatePicker id="pick-b" base={B} somenteNominais onPick={(c) => set("b", String(c.id))} placeholder={b ? nomeCand(b) : L("Escolher…", "Choose…")} /></div>
         <MunicipioSelect base={B} value={municipio} onChange={(cd) => set("mun", cd)} id="mun-dob" />
       </div>
       {votos.error && <ErrorBox error={votos.error} />}
-      {!analise || !a || !b || !soma ? <Loading texto={L("Cruzando as candidaturas…", "Crossing the candidacies…")} /> : (
+      {!a || !b ? (
+        <p className="rounded-lg border border-line bg-panel p-5 text-muted" role="status">
+          {L("Selecione duas candidaturas acima para iniciar a comparação.", "Select two candidacies above to start the comparison.")}
+        </p>
+      ) : !analise || !soma ? <Loading texto={L("Cruzando as candidaturas…", "Crossing the candidacies…")} /> : (
         <>
           {municipio && (
             <Segmented label={L("Modo do mapa", "Map mode")} value={modo} onChange={(m) => set("modo", m)}

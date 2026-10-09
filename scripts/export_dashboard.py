@@ -38,14 +38,6 @@ GEO_OUT = ROOT / "dashboard" / "public" / "geo"
 IBGE_UF = {"SP": 35, "MG": 31, "RS": 43}
 # Cada UF ocupa uma faixa própria de ids no banco (SP mantém os ids originais).
 UF_ORDEM = ["SP", "MG", "RS"]
-# Candidaturas em destaque por UF: (cargo, número)
-DESTAQUES = {
-    "SP": [(7, 50000), (6, 5005)],   # Bancada Feminista, Guilherme Cortez
-    "MG": [(7, 50099), (6, 5050)],   # Iza Lourença, Duda Salabert
-    "RS": [(7, 50123), (5, 500)],    # Matheus Gomes, Manuela (Senado)
-}
-
-
 def offsets(uf: str) -> tuple[int, int]:
     """(deslocamento dos ids de locais, deslocamento dos ids de candidaturas)."""
     i = UF_ORDEM.index(uf)
@@ -367,12 +359,7 @@ def export_dev_json(uf: str) -> int:
         "situacao": "situacao"}))
     dump(dest / "municipios.json", cols("SELECT * FROM municipios ORDER BY cd_municipio", {
         "cd": "cd_municipio", "ibge": "cd_ibge", "nome": "nome", "lat": "lat", "lon": "lon"}))
-    dest_ids = []
-    for cargo, numero in DESTAQUES.get(uf, []):
-        dest_ids += con.sql(f"""SELECT id FROM candidaturas WHERE tipo = 'nominal'
-                                AND cd_cargo = {cargo} AND numero = {numero}""").fetchall()
-    dump(dest / "config.json", {"partidos": [{"sigla": "PSOL", "ordem": 1, "cor": "#7b1fa2"}],
-                                "candidaturas": [r[0] for r in dest_ids]})
+    dump(dest / "config.json", {"partidos": [{"sigla": "PSOL", "ordem": 1, "cor": "#7b1fa2"}]})
     for (cargo,) in con.sql("SELECT DISTINCT cd_cargo FROM totais_local").fetchall():
         dump(dest / "totais" / f"{cargo}.json", cols(
             f"SELECT * FROM totais_local WHERE cd_cargo = {cargo} ORDER BY local_id",

@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { DataTable } from "../components/DataTable";
 import { LazyMap } from "../components/LazyMap";
-import { CandidatePicker, ErrorBox, Loading, MunicipioSelect, Segmented, SituacaoBadge, nomeCand } from "../components/ui";
+import { CandidatePicker, ErrorBox, Loading, MunicipioSelect, SituacaoBadge, nomeCand } from "../components/ui";
 import { cssRgb, type RGB } from "../lib/colors";
 import { porLocal, useBase, useTotais, useVotos, type Base, type PorLocal } from "../lib/data";
 import type { ExportCol } from "../lib/export";
@@ -63,26 +63,19 @@ export function Presidente() {
     [b],
   );
   const refId = Number(sp.get("ref") ?? presCands.find((c) => c.numero === 13)?.id ?? presCands[0]?.id);
-  const candId = Number(sp.get("c") ?? b?.candidaturasDestaque[0]);
+  const candId = Number(sp.get("c"));
   const ref = b?.candById.get(refId);
   const cand = b?.candById.get(candId);
 
-  // Candidaturas da tabela por município/bairro: as em destaque + a selecionada (se for outra).
-  const tabela = useMemo(() => {
-    if (!b) return [] as Candidatura[];
-    const ds = b.candidaturasDestaque.map((id) => b.candById.get(id)).filter(Boolean) as Candidatura[];
-    return cand && !ds.some((d) => d.id === cand.id) ? [...ds, cand] : ds;
-  }, [b, cand]);
-  const ids = useMemo(() => [...presCands.map((c) => c.id), ...tabela.map((c) => c.id)], [presCands, tabela]);
+  const tabela = useMemo(() => cand ? [cand] : [] as Candidatura[], [cand]);
+  const ids = useMemo(() => cand ? [...presCands.map((c) => c.id), cand.id] : [], [presCands, cand]);
   const votos = useVotos(ids, municipio);
   const totPres = useTotais(1, municipio);
   const totCand = useTotais(cand?.cargo, municipio);
-  const tot6 = useTotais(6, municipio);
-  const tot7 = useTotais(7, municipio);
 
   const analise = useMemo(() => {
-    if (!b || !votos.data || !totPres.data || !totCand.data || !tot6.data || !tot7.data || !cand || !ref) return null;
-    const totais = { 1: totPres.data, 6: tot6.data, 7: tot7.data, [cand.cargo]: totCand.data } as Record<number, typeof totPres.data>;
+    if (!b || !votos.data || !totPres.data || !totCand.data || !cand || !ref) return null;
+    const totais = { 1: totPres.data, [cand.cargo]: totCand.data } as Record<number, typeof totPres.data>;
     const pcs = tabela.filter((c) => totais[c.cargo]).map((c) => ({ c, pl: porLocal(b, votos.data![c.id], totais[c.cargo]) }));
     const pres = presCands.map((c) => porLocal(b, votos.data![c.id], totPres.data));
     const iRef = presCands.findIndex((c) => c.id === ref.id);
@@ -95,18 +88,16 @@ export function Presidente() {
       vencedor[i] = best;
     }
     return { pres, iRef, pc, vencedor, pcs };
-  }, [b, votos.data, totPres.data, totCand.data, tot6.data, tot7.data, presCands, cand, ref, tabela]);
+  }, [b, votos.data, totPres.data, totCand.data, presCands, cand, ref, tabela]);
 
   if (base.error) return <ErrorBox error={base.error} />;
   if (!b) return <Loading />;
-  const destaques = b.candidaturasDestaque.map((id) => b.candById.get(id)).filter(Boolean) as Candidatura[];
-
   return (
     <div className="flex flex-col gap-6">
       <header>
         <div className="eyebrow">{L("Presidente × candidatura", "President × candidate")}</div>
         <h1 className="display text-3xl">
-          {cand ? nomeCand(cand) : "?"} {L("onde", "where")} {ref ? ref.nome : "?"} {L("venceu", "won")}
+          {cand && ref ? <>{nomeCand(cand)} {L("onde", "where")} {ref.nome} {L("venceu", "won")}</> : L("Escolha uma candidatura", "Choose a candidacy")}
         </h1>
         <p className="max-w-3xl text-muted">
           {L(
@@ -119,11 +110,8 @@ export function Presidente() {
       <div className="flex flex-wrap items-end gap-4">
         <div className="flex flex-col gap-1 text-sm text-muted">
           {L("Candidatura analisada", "Candidate analyzed")}
-          <div className="flex flex-wrap items-center gap-2">
-            <Segmented label={L("Candidatura", "Candidacy")} value={String(candId)} onChange={(v) => set("c", v)}
-              options={destaques.map((c) => ({ id: String(c.id), label: c.nome }))} />
-            <div className="w-72"><CandidatePicker id="pres-cand" base={b} onPick={(c) => set("c", String(c.id))} placeholder={L("ou outra candidatura…", "or another candidacy…")} /></div>
-          </div>
+          <div className="w-80"><CandidatePicker id="pres-cand" base={b} somenteNominais onPick={(c) => set("c", String(c.id))}
+            placeholder={cand ? nomeCand(cand) : L("Escolher candidatura…", "Choose a candidacy…")} /></div>
         </div>
         <label htmlFor="pres-ref" className="flex flex-col gap-1 text-sm text-muted">{L("Referência para presidente", "Reference for president")}
           <select id="pres-ref" value={refId} onChange={(e) => set("ref", e.target.value)}
@@ -135,7 +123,11 @@ export function Presidente() {
       </div>
 
       {votos.error && <ErrorBox error={votos.error} />}
-      {!analise || !cand || !ref ? <Loading texto={L("Cruzando com a votação para presidente…", "Crossing with the presidential vote…")} /> : (
+      {!cand ? (
+        <p className="rounded-lg border border-line bg-panel p-5 text-muted" role="status">
+          {L("Selecione uma candidatura acima para iniciar a análise presidencial.", "Select a candidacy above to start the presidential analysis.")}
+        </p>
+      ) : !analise || !ref ? <Loading texto={L("Cruzando com a votação para presidente…", "Crossing with the presidential vote…")} /> : (
         <Conteudo base={b} cand={cand} ref_={ref} municipio={municipio} analise={analise}
           presCands={presCands} onMunicipio={(cd) => set("mun", cd)} />
       )}

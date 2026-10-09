@@ -14,7 +14,7 @@ import { useHistorico } from "./Historico";
 import { situacaoTexto } from "./ui";
 
 /*
- * Análise breve e objetiva das candidaturas prioritárias (destaques da UF), gerada a partir dos dados:
+ * Análise breve e objetiva das candidaturas acompanhadas, gerada a partir dos dados:
  * resultado, comparação com 2022, concentração territorial, tráfego pago e dobradas. Cada ponto traz um número;
  * nada de causalidade (anúncios e votos são cruzados de forma descritiva).
  */

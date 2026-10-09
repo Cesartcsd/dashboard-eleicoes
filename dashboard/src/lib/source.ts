@@ -3,7 +3,8 @@
  * no desenvolvimento local (VITE_DATA_SOURCE=dev), arquivos de dev-data/ no mesmo formato.
  */
 import type {
-  AnaliseTerritorial, CandidaturaAcompanhada, CandidaturasCols, Config, LocaisCols, MunicipiosCols, Painel, TopCandidatura, TotaisCols, VotosCols,
+  AnaliseTerritorial, CandidaturaAcompanhada, CandidaturasCols, Config, DestaqueVisaoGeral, LocaisCols, MunicipiosCols, Painel,
+  TopCandidatura, TotaisCols, VotosCols,
 } from "./types";
 import { supabase } from "./supabase";
 import { getUf } from "./uf";
@@ -190,6 +191,8 @@ export interface DataSource {
   candidaturasAcompanhadas(): Promise<CandidaturaAcompanhada[]>;
   salvarCandidaturaAcompanhada(id: number, ordem: number): Promise<void>;
   removerCandidaturaAcompanhada(id: number): Promise<void>;
+  destaquesVisaoGeral(uf: string): Promise<DestaqueVisaoGeral[]>;
+  substituirDestaquesVisaoGeral(uf: string, ids: number[]): Promise<void>;
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -247,6 +250,10 @@ async function devMunSet(cd?: string | null): Promise<Set<number> | null> {
 const paineisKey = () => `paineis-dev-${getUf()}`;
 const analisesKey = () => `analises-territoriais-dev-${getUf()}`;
 const acompanhadasKey = () => `candidaturas-acompanhadas-dev-${getUf()}`;
+const destaquesKey = (uf: string) => `destaques-visao-geral-dev-${uf}`;
+const ACOMPANHADAS_PADRAO: Record<string, [number, number][]> = {
+  SP: [[6, 5005], [7, 50000]], MG: [[7, 50099]], RS: [[7, 50123], [5, 500]],
+};
 const PAINEIS_PADRAO: Painel[] = [
   { id: "padrao-psol", titulo: "PSOL · 10 mais votados (federal e estadual)", candidatura_ids: [],
     regra: { partido: "PSOL", cargos: [6, 7], top: 10 }, cd_municipio: null, grupo: "PSOL · comparativos", ordem: 1 },
@@ -303,9 +310,12 @@ const dev: DataSource = {
     const out: MetaPrioritaria[] = [];
     for (const uf of ["sp", "mg", "rs"]) {
       try {
-        const cfg = await getJson<Config>(`/dev-data/${uf}/config.json`);
         const cs = await getJson<CandidaturasCols>(`/dev-data/${uf}/candidaturas.json`);
-        for (const id of cfg.candidaturas) {
+        const ids = (ACOMPANHADAS_PADRAO[uf.toUpperCase()] ?? []).flatMap(([cargo, numero]) => {
+          const i = cs.id.findIndex((_, k) => cs.cargo[k] === cargo && cs.numero[k] === numero && cs.tipo[k] === "nominal");
+          return i < 0 ? [] : [cs.id[i]];
+        });
+        for (const id of ids) {
           const i = cs.id.indexOf(id);
           const prop = await getJson<MetaAnuncio[]>(`/dev-data/${uf}/meta/${id}.json`).catch(() => [] as MetaAnuncio[]);
           const dob = await getJson<MetaMencao[]>(`/dev-data/${uf}/meta/dobradas/${id}.json`).catch(() => [] as MetaMencao[]);
@@ -436,9 +446,8 @@ const dev: DataSource = {
       const saved = JSON.parse(localStorage.getItem(acompanhadasKey()) ?? "null") as CandidaturaAcompanhada[] | null;
       if (saved) return saved;
     } catch { /* usa os padrões abaixo */ }
-    const defaults: Record<string, [number, number][]> = { SP: [[6, 5005], [7, 50000]], MG: [[7, 50099]], RS: [[7, 50123], [5, 500]] };
     const c = await dev.candidaturas();
-    return (defaults[getUf()] ?? []).flatMap(([cargo, numero], i) => {
+    return (ACOMPANHADAS_PADRAO[getUf()] ?? []).flatMap(([cargo, numero], i) => {
       const j = c.id.findIndex((_, k) => c.cargo[k] === cargo && c.numero[k] === numero && c.tipo[k] === "nominal");
       return j < 0 ? [] : [{ candidatura_id: c.id[j], ordem: i + 1 }];
     });
@@ -450,6 +459,12 @@ const dev: DataSource = {
   async removerCandidaturaAcompanhada(id) {
     const all = await dev.candidaturasAcompanhadas();
     localStorage.setItem(acompanhadasKey(), JSON.stringify(all.filter((x) => x.candidatura_id !== id)));
+  },
+  async destaquesVisaoGeral(uf) {
+    try { return JSON.parse(localStorage.getItem(destaquesKey(uf)) ?? "[]") as DestaqueVisaoGeral[]; } catch { return []; }
+  },
+  async substituirDestaquesVisaoGeral(uf, ids) {
+    localStorage.setItem(destaquesKey(uf), JSON.stringify(ids.map((candidatura_id, i) => ({ candidatura_id, ordem: i + 1 }))));
   },
 };
 
@@ -485,14 +500,10 @@ const remote: DataSource = {
     };
   },
   async config() {
-    const [p, c] = await Promise.all([
-      supabase().from("partidos_destaque").select("sg_partido, ordem, cor").order("ordem"),
-      supabase().from("candidaturas_destaque").select("candidatura_id, ordem").order("ordem"),
-    ]);
-    if (p.error || c.error) rpcError(L("configuração", "configuration"), p.error ?? c.error);
+    const p = await supabase().from("partidos_destaque").select("sg_partido, ordem, cor").order("ordem");
+    if (p.error) rpcError(L("configuração", "configuration"), p.error);
     return {
       partidos: (p.data ?? []).map((r) => ({ sigla: r.sg_partido, ordem: r.ordem, cor: r.cor })),
-      candidaturas: (c.data ?? []).map((r) => r.candidatura_id),
     };
   },
   votos: (ids, cd) => rpc("votos_candidaturas", { p_ids: ids, p_cd_municipio: cd ?? null }),
@@ -547,6 +558,14 @@ const remote: DataSource = {
   },
   salvarCandidaturaAcompanhada: (id, ordem) => rpcVoid("salvar_candidatura_acompanhada", { p_candidatura_id: id, p_ordem: ordem }),
   removerCandidaturaAcompanhada: (id) => rpcVoid("remover_candidatura_acompanhada", { p_candidatura_id: id }),
+  async destaquesVisaoGeral(uf) {
+    const { data, error } = await supabase().from("destaques_visao_geral").select("candidatura_id, ordem")
+      .eq("uf", uf).order("ordem");
+    if (error) rpcError(L("destaques da Visão Geral", "Overview highlights"), error);
+    return (data ?? []) as DestaqueVisaoGeral[];
+  },
+  substituirDestaquesVisaoGeral: (uf, ids) =>
+    rpcVoid("substituir_destaques_visao_geral", { p_uf: uf, p_ids: ids }),
 };
 
 export const source: DataSource = isDev ? dev : remote;

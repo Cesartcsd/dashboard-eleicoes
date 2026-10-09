@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
 import { usePaineis } from "../pages/Paineis";
-import { useBase } from "../lib/data";
 import type { Painel } from "../lib/types";
 import { L } from "../lib/i18n";
 
@@ -18,7 +17,7 @@ export function agruparPaineis(paineis: Painel[]): [string, Painel[]][] {
 
 /** Nome do grupo no idioma atual (os grupos vêm dos dados, em português). */
 export function rotuloGrupo(g: string): string {
-  if (g === "Candidaturas em destaque") return L(g, "Featured candidates");
+  if (g === "Candidaturas em destaque") return L("Análises de candidaturas", "Candidacy analyses");
   if (g === "PSOL · comparativos") return L(g, "PSOL · comparisons");
   return g;
 }
@@ -26,11 +25,6 @@ export function rotuloGrupo(g: string): string {
 /** Painéis prontos (sem autor) em destaque, agrupados. */
 export function PaineisProntos() {
   const paineis = usePaineis();
-  const base = useBase();
-  const nomes = (base.data?.candidaturasDestaque ?? []).map((id) => base.data?.candById.get(id)?.nome).filter(Boolean);
-  const rotuloPres = nomes.length
-    ? L(`${nomes.join(" e ")} onde o Lula venceu`, `${nomes.join(" and ")} where Lula won`)
-    : L("Candidaturas onde o Lula venceu", "Candidates where Lula won");
   const prontos = (paineis.data ?? []).filter((p) => !p.autor);
   if (!prontos.length) return null;
   return (
@@ -55,7 +49,7 @@ export function PaineisProntos() {
               {grupo === "Candidaturas em destaque" && (
                 <li>
                   <Link to="/presidente" className="flex items-baseline gap-2 border-b border-line py-1.5 hover:text-accent">
-                    <span className="font-semibold">{rotuloPres}</span>
+                    <span className="font-semibold">{L("Escolher candidatura e referência presidencial", "Choose a candidacy and presidential reference")}</span>
                     <span className="text-xs text-muted">{L("Presidente × candidatura", "President × candidate")}</span>
                   </Link>
                 </li>

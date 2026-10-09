@@ -101,19 +101,19 @@ export function nomeCand(c: Candidatura) {
 }
 
 /** Busca de qualquer candidatura (todos os partidos). */
-export function CandidatePicker({ base, onPick, cargo, placeholder, id = "busca-cand" }: {
-  base: Base; onPick: (c: Candidatura) => void; cargo?: number; placeholder?: string; id?: string;
+export function CandidatePicker({ base, onPick, cargo, somenteNominais = false, placeholder, id = "busca-cand" }: {
+  base: Base; onPick: (c: Candidatura) => void; cargo?: number; somenteNominais?: boolean; placeholder?: string; id?: string;
 }) {
   const [q, setQ] = useState("");
   const res = useMemo(() => {
     const t = normalizar(q.trim());
     if (t.length < 2) return [];
     return base.candidaturas
-      .filter((c) => (cargo == null || c.cargo === cargo) &&
+      .filter((c) => (cargo == null || c.cargo === cargo) && (!somenteNominais || c.tipo === "nominal") &&
         normalizar(`${c.numero} ${c.nome} ${c.nomeCompleto ?? ""} ${c.partido ?? ""}`).includes(t))
       .sort((a, b) => b.votos - a.votos)
       .slice(0, 12);
-  }, [q, base, cargo]);
+  }, [q, base, cargo, somenteNominais]);
   return (
     <div className="relative">
       <input id={id} type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder ?? L("Buscar candidatura por nome, número ou partido…", "Search candidate by name, number or party…")}

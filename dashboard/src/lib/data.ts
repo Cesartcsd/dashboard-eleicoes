@@ -12,7 +12,6 @@ export interface Base {
   municipios: Municipio[];
   munByCd: Map<string, Municipio>;
   partidosDestaque: { sigla: string; cor: string }[];
-  candidaturasDestaque: number[];
 }
 
 type BaseBruta = [
@@ -63,7 +62,6 @@ async function loadBase(): Promise<Base> {
     candidaturas, candById: new Map(candidaturas.map((x) => [x.id, x])),
     municipios, munByCd,
     partidosDestaque: cfg.partidos.sort((a, b) => a.ordem - b.ordem).map(({ sigla, cor }) => ({ sigla, cor })),
-    candidaturasDestaque: cfg.candidaturas,
   };
 }
 

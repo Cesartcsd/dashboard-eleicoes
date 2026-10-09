@@ -23,6 +23,7 @@ import { fmt, pct, titulo } from "../lib/format";
 import { CARGOS } from "../lib/types";
 import { useUf } from "../lib/uf";
 import { L } from "../lib/i18n";
+import { useCandidaturasAcompanhadas } from "../lib/atuacao";
 
 export function useMapParams(defaultModo: Modo = "escolas") {
   const [sp, setSp] = useSearchParams();
@@ -54,6 +55,7 @@ export function CandidatePanel() {
   const hist = useHistorico(cand?.id);
   const temHistorico = (hist.data?.resumo.length ?? 0) > 0;
   const totais = useTotais(cand?.cargo, null);
+  const acompanhadas = useCandidaturasAcompanhadas(base.data);
 
   const dados = useMemo(
     () => (base.data && votos.data && totais.data && cand ? porLocal(base.data, votos.data[cand.id], totais.data) : undefined),
@@ -91,8 +93,8 @@ export function CandidatePanel() {
       {/* gasto em anúncios (próprio + dobradas), para qualquer candidatura com dados da Meta */}
       <GastoTopo candId={cand.id} />
 
-      {/* candidaturas prioritárias (destaques da UF): análise breve no topo */}
-      {dados && !municipio && b.candidaturasDestaque.includes(cand.id) && <AnaliseCandidatura base={b} cand={cand} dados={dados} />}
+      {/* candidaturas acompanhadas: análise breve no topo */}
+      {dados && !municipio && acompanhadas.some((c) => c.id === cand.id) && <AnaliseCandidatura base={b} cand={cand} dados={dados} />}
 
       {/* Senado: análise própria (todas as candidaturas ao cargo, posição, vagas, adversário) */}
       {cand.cargo === 5 && cand.tipo === "nominal" ? (

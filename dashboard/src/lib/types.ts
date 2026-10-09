@@ -51,7 +51,11 @@ export interface TotaisCols {
 
 export interface Config {
   partidos: { sigla: string; ordem: number; cor: string }[];
-  candidaturas: number[];
+}
+
+export interface DestaqueVisaoGeral {
+  candidatura_id: number;
+  ordem: number;
 }
 
 export interface TopCandidatura {
